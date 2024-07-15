@@ -9,6 +9,10 @@ import os
 import torch
 import tempfile
 
+import os
+# Set KMP_DUPLICATE_LIB_OK environment variable to TRUE
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import mast3r.utils.path_to_dust3r  # noqa
 from dust3r.model import AsymmetricCroCo3DStereo
 from mast3r.model import AsymmetricMASt3R

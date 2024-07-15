@@ -34,6 +34,9 @@ pl.ion()
 torch.backends.cuda.matmul.allow_tf32 = True  # for gpu >= Ampere and pytorch >= 1.12
 batch_size = 1
 
+import os
+# Set KMP_DUPLICATE_LIB_OK environment variable to TRUE
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 def get_args_parser():
     parser = dust3r_get_args_parser()
@@ -296,7 +299,7 @@ if __name__ == '__main__':
     if args.weights is not None:
         weights_path = args.weights
     else:
-        weights_path = "naver/" + args.model_name
+        weights_path = r"D:\mast3r\checkpoints\MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
 
     model = AsymmetricMASt3R.from_pretrained(weights_path).to(args.device)
     chkpt_tag = hash_md5(weights_path)

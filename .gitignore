@@ -127,3 +127,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+/.idea
+checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth
