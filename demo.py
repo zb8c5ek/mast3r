@@ -7,6 +7,9 @@
 # --------------------------------------------------------
 import os
 import torch
+# Set PyTorch Hub to /d_disk/torch_hub
+torch.hub.set_dir('/d_disk/torch_hub')
+
 import tempfile
 from contextlib import nullcontext
 
@@ -27,16 +30,20 @@ if __name__ == '__main__':
     parser = get_args_parser()
     args = parser.parse_args()
     set_print_with_timestamp()
-
+    from pathlib import Path
+    import datetime
     if args.server_name is not None:
         server_name = args.server_name
     else:
-        server_name = '0.0.0.0' if args.local_network else '127.0.0.1'
+        server_name = '0.0.0.0'
+            #if args.local_network else '127.0.0.1'
 
     if args.weights is not None:
         weights_path = args.weights
     else:
-        weights_path = "naver/" + args.model_name
+        weights_path = Path("checkpoints/" + args.model_name + '.pth').resolve()
+        assert weights_path.exists(), f"Model file {weights_path} not found."
+        weights_path = weights_path.as_posix()
 
     model = AsymmetricMASt3R.from_pretrained(weights_path).to(args.device)
     chkpt_tag = hash_md5(weights_path)
@@ -49,3 +56,5 @@ if __name__ == '__main__':
         os.makedirs(cache_path, exist_ok=True)
         main_demo(cache_path, model, args.retrieval_model, args.device, args.image_size, server_name, args.server_port,
                   silent=args.silent, share=args.share, gradio_delete_cache=args.gradio_delete_cache)
+        # Print the URL with localhost
+        print(f"[{datetime.datetime.now()}] View Outside the Docker: http://localhost:{args.server_port}")
