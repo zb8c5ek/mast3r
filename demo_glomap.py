@@ -28,16 +28,20 @@ if __name__ == '__main__':
     parser = get_args_parser()
     args = parser.parse_args()
     set_print_with_timestamp()
+    from pathlib import Path
 
     if args.server_name is not None:
         server_name = args.server_name
     else:
-        server_name = '0.0.0.0' if args.local_network else '127.0.0.1'
+        server_name = '0.0.0.0'
+            #if args.local_network else '127.0.0.1'
 
     if args.weights is not None:
         weights_path = args.weights
     else:
-        weights_path = "naver/" + args.model_name
+        weights_path = Path("checkpoints/" + args.model_name + '.pth').resolve()
+        assert weights_path.exists(), f"Model file {weights_path} not found."
+        weights_path = weights_path.as_posix()
 
     model = AsymmetricMASt3R.from_pretrained(weights_path).to(args.device)
     chkpt_tag = hash_md5(weights_path)
