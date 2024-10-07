@@ -372,4 +372,6 @@ def main_demo(tmpdirname, model, retrieval_model, device, image_size, server_nam
                                     inputs=[scene, min_conf_thr, as_pointcloud, mask_sky,
                                             clean_depth, transparent_cams, cam_size, TSDF_thresh],
                                     outputs=outmodel)
+    # Disable analytics
+    # gradio.analytics_enabled = False
     demo.launch(share=share, server_name=server_name, server_port=server_port)
