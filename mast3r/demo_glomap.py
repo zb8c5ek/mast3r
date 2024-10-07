@@ -7,6 +7,8 @@
 # --------------------------------------------------------
 import pycolmap
 import gradio
+# Disable analytics
+gradio.analytics_enabled = False
 import os
 import numpy as np
 import functools
