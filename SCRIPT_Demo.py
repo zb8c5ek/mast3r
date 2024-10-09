@@ -675,7 +675,6 @@ if __name__ == '__main__':
     confidence_masks = to_numpy(scene.get_masks())
     focals = to_numpy(scene.get_focals())
     ##########################################################################################################################################################################################
-
     # save
     save_colmap_cameras(ori_size, intrinsics, os.path.join(output_colmap_path, 'cameras.txt'))
     save_colmap_images(poses, os.path.join(output_colmap_path, 'images.txt'), train_img_list)

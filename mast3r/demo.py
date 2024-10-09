@@ -62,6 +62,48 @@ def get_args_parser():
     return parser
 
 
+def write_ply(filename, points, colors):
+    """
+    Write points and colors to a PLY file.
+
+    Parameters:
+    filename (str): The output PLY file path.
+    points (np.ndarray): The points array of shape (N, 3).
+    colors (np.ndarray): The colors array of shape (N, 3).
+    """
+    # Ensure points and colors have the correct shape
+    assert points.shape[1] == 3, "Points array must have shape (N, 3)"
+    assert colors.shape[1] == 3, "Colors array must have shape (N, 3)"
+    assert points.shape[0] == colors.shape[0], "Points and colors must have the same number of vertices"
+
+    # Check and rescale color values if necessary
+    if colors.max() <= 1.0:
+        colors = (colors * 255).astype(np.uint8)
+    else:
+        colors = colors.astype(np.uint8)
+
+    num_vertices = points.shape[0]
+
+    with open(filename, 'w') as ply_file:
+        # Write the header
+        ply_file.write("ply\n")
+        ply_file.write("format ascii 1.0\n")
+        ply_file.write(f"element vertex {num_vertices}\n")
+        ply_file.write("property float x\n")
+        ply_file.write("property float y\n")
+        ply_file.write("property float z\n")
+        ply_file.write("property uchar red\n")
+        ply_file.write("property uchar green\n")
+        ply_file.write("property uchar blue\n")
+        ply_file.write("end_header\n")
+
+        # Write the vertex data
+        for point, color in zip(points, colors):
+            ply_file.write(f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f} {int(color[0])} {int(color[1])} {int(color[2])}\n")
+
+
+
+
 def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world, cam_size=0.05,
                                  cam_color=None, as_pointcloud=False,
                                  transparent_cams=False, silent=False):
@@ -80,6 +122,10 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
         valid_msk = np.isfinite(pts.sum(axis=1))
         pct = trimesh.PointCloud(pts[valid_msk], colors=col[valid_msk])
         scene.add_geometry(pct)
+        # Write the ply file
+        outfile_ply = outfile.replace('.glb', '.ply')
+        write_ply(outfile_ply, pts, col)
+        print(f"PLY file saved to {outfile_ply}")
     else:
         meshes = []
         for i in range(len(imgs)):
@@ -88,6 +134,7 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
             meshes.append(pts3d_to_trimesh(imgs[i], pts3d_i, msk_i))
         mesh = trimesh.Trimesh(**cat_meshes(meshes))
         scene.add_geometry(mesh)
+
 
     # add each camera
     for i, pose_c2w in enumerate(cams2world):
@@ -105,7 +152,7 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
     if not silent:
         print('(exporting 3D scene to', outfile, ')')
     scene.export(file_obj=outfile)
-    return outfile
+    return outfile, outfile_ply
 
 
 def get_3D_model_from_scene(silent, scene_state, min_conf_thr=2, as_pointcloud=False, mask_sky=False,
@@ -132,8 +179,11 @@ def get_3D_model_from_scene(silent, scene_state, min_conf_thr=2, as_pointcloud=F
     else:
         pts3d, _, confs = to_numpy(scene.get_dense_pts3d(clean_depth=clean_depth))
     msk = to_numpy([c > min_conf_thr for c in confs])
-    return _convert_scene_output_to_glb(outfile, rgbimg, pts3d, msk, focals, cams2world, as_pointcloud=as_pointcloud,
+
+    outfile_glb, outfile_ply = _convert_scene_output_to_glb(outfile, rgbimg, pts3d, msk, focals, cams2world, as_pointcloud=as_pointcloud,
                                         transparent_cams=transparent_cams, cam_size=cam_size, silent=silent)
+
+    return outfile_glb
 
 
 def get_reconstructed_scene(outdir, gradio_delete_cache, model, device, silent, image_size, current_scene_state,
