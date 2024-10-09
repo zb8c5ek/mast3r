@@ -129,3 +129,4 @@ dmypy.json
 .pyre/
 /.idea
 checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth
+/assets/zmpark

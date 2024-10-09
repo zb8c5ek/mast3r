@@ -66,7 +66,10 @@ def _convert_scene_output_to_glb(outdir, imgs, pts3d, mask, focals, cams2world, 
     if as_pointcloud:
         pts = np.concatenate([p[m.ravel()] for p, m in zip(pts3d, mask)])
         col = np.concatenate([p[m] for p, m in zip(imgs, mask)])
+        # TODO: with both points and colors, write out a ply !
         pct = trimesh.PointCloud(pts.reshape(-1, 3), colors=col.reshape(-1, 3))
+        pct.export(os.path.join(outdir, 'scene.ply'))
+        print("Pointcloud saved to", os.path.join(outdir, 'scene.ply'))
         scene.add_geometry(pct)
     else:
         meshes = []
@@ -88,11 +91,11 @@ def _convert_scene_output_to_glb(outdir, imgs, pts3d, mask, focals, cams2world, 
     rot = np.eye(4)
     rot[:3, :3] = Rotation.from_euler('y', np.deg2rad(180)).as_matrix()
     scene.apply_transform(np.linalg.inv(cams2world[0] @ OPENGL @ rot))
-    outfile = os.path.join(outdir, 'scene.glb')
+    outfile_glb = os.path.join(outdir, 'scene.glb')
     if not silent:
-        print('(exporting 3D scene to', outfile, ')')
-    scene.export(file_obj=outfile)
-    return outfile
+        print('(exporting 3D scene to', outfile_glb, ')')
+    scene.export(file_obj=outfile_glb)
+    return outfile_glb
 
 
 def get_3D_model_from_scene(outdir, silent, scene, min_conf_thr=2, as_pointcloud=False, mask_sky=False,
@@ -115,8 +118,11 @@ def get_3D_model_from_scene(outdir, silent, scene, min_conf_thr=2, as_pointcloud
     else:
         pts3d, _, confs = to_numpy(scene.get_dense_pts3d(clean_depth=clean_depth))
     msk = to_numpy([c > min_conf_thr for c in confs])
-    return _convert_scene_output_to_glb(outdir, rgbimg, pts3d, msk, focals, cams2world, as_pointcloud=as_pointcloud,
+
+    recon_model_glb = _convert_scene_output_to_glb(outdir, rgbimg, pts3d, msk, focals, cams2world, as_pointcloud=as_pointcloud,
                                         transparent_cams=transparent_cams, cam_size=cam_size, silent=silent)
+
+    return recon_model_glb
 
 
 def get_reconstructed_scene(outdir, model, device, silent, image_size, filelist, optim_level, lr1, niter1, lr2, niter2,
