@@ -5,35 +5,32 @@
 # --------------------------------------------------------
 # gradio demo functions
 # --------------------------------------------------------
-import pycolmap
-import gradio
+import copy
+import functools
 # # Disable analytics
 # gradio.analytics_enabled = False
 import os
-import numpy as np
-import functools
-import trimesh
-import copy
-from scipy.spatial.transform import Rotation
-import tempfile
 import shutil
+import tempfile
+
 import PIL.Image
+import gradio
+import numpy as np
+import pycolmap
 import torch
-
-from kapture.converter.colmap.database_extra import kapture_to_colmap
+import trimesh
+from dust3rDir.dust3r.utils.image import load_images
+from dust3rDir.dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL
 from kapture.converter.colmap.database import COLMAPDatabase
-
-from mast3r.colmap.mapping import kapture_import_image_folder_or_list, run_mast3r_matching, glomap_run_mapper
-from mast3r.demo import set_scenegraph_options
-from mast3r.retrieval.processor import Retriever
-from mast3r.image_pairs import make_pairs
+from kapture.converter.colmap.database_extra import kapture_to_colmap
+from scipy.spatial.transform import Rotation
 
 import mast3r.utils.path_to_dust3r  # noqa
-from dust3r.utils.image import load_images
-from dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL
-from dust3r.demo import get_args_parser as dust3r_get_args_parser
-
-import matplotlib.pyplot as pl
+from dust3rDir.demo import get_args_parser as dust3r_get_args_parser
+from mast3r.colmap.mapping import kapture_import_image_folder_or_list, run_mast3r_matching, glomap_run_mapper
+from mast3r.demo import set_scenegraph_options
+from mast3r.image_pairs import make_pairs
+from mast3r.retrieval.processor import Retriever
 
 
 class GlomapRecon:
@@ -119,7 +116,7 @@ def get_reconstructed_scene(glomap_bin, outdir, gradio_delete_cache, model, retr
     pairs = make_pairs(imgs, scene_graph=scene_graph, prefilter=None, symmetrize=True, sim_mat=sim_matrix)
 
     if current_scene_state is not None and \
-        not current_scene_state.should_delete and \
+            not current_scene_state.should_delete and \
             current_scene_state.cache_dir is not None:
         cache_dir = current_scene_state.cache_dir
     elif gradio_delete_cache:
@@ -176,7 +173,7 @@ def get_reconstructed_scene(glomap_bin, outdir, gradio_delete_cache, model, retr
     glomap_run_mapper(glomap_bin, colmap_db_path, reconstruction_path, root_path)
 
     if current_scene_state is not None and \
-        not current_scene_state.should_delete and \
+            not current_scene_state.should_delete and \
             current_scene_state.outfile_name is not None:
         outfile_name = current_scene_state.outfile_name
     else:
@@ -222,6 +219,28 @@ def get_reconstructed_scene(glomap_bin, outdir, gradio_delete_cache, model, retr
     return scene_state, outfile
 
 
+def write_ply(filename, points, colors):
+    """
+    Write points and colors to a PLY file.
+
+    :param filename: The name of the PLY file to write.
+    :param points: A numpy array of shape (N, 3) containing the 3D points.
+    :param colors: A numpy array of shape (N, 3) containing the RGB colors.
+    """
+    # Ensure colors are in the range [0, 255]
+    if colors.max() <= 1.0:
+        colors = (colors * 255).astype(np.uint8)
+
+    # Create the PLY header
+    header = f"ply\nformat ascii 1.0\nelement vertex {points.shape[0]}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n"
+    # Write the header and data to the file
+    with open(filename, 'w') as ply_file:
+        ply_file.write(header)
+        for point, color in zip(points, colors):
+            ply_file.write(f"{point[0]} {point[1]} {point[2]} {color[0]} {color[1]} {color[2]}\n")
+    print(f"Saved point cloud to {filename}")
+
+
 def get_3D_model_from_scene(silent, scene_state, transparent_cams=False, cam_size=0.05):
     """
     extract 3D_model (glb file) from a reconstructed scene
@@ -238,6 +257,11 @@ def get_3D_model_from_scene(silent, scene_state, transparent_cams=False, cam_siz
     pts = np.stack([p[0] for p in recon.points3d], axis=0)
     col = np.stack([p[1] for p in recon.points3d], axis=0)
     pct = trimesh.PointCloud(pts, colors=col)
+    # Write PLY Out
+    fn_ply_output = outfile.replace('.glb', '.ply')
+    write_ply(fn_ply_output, pts, col)
+    # ==============
+
     scene.add_geometry(pct)
 
     # add each camera
