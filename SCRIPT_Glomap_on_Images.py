@@ -164,9 +164,12 @@ def get_reconstructed_scene(
         kapture_to_colmap(kdata, root_path, tar_handler=None, database=colmap_db,
                           keypoints_type=None, descriptors_type=None, export_two_view_geometry=False)
         device = "cuda"
+        # TODO: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
+        dense_matching = False   # False
+        conf_thr = 1.001  # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
-                                                 False, 5, 1.001,
+                                                 dense_matching, 5, conf_thr,
                                                  False, 3)
         colmap_db.close()
     except Exception as e:
