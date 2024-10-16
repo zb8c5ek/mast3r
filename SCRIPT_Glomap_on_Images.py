@@ -241,8 +241,8 @@ if __name__ == "__main__":
     from pathlib import Path
     from time import time
     start_time = time()
-    dp_images = Path("/d_disk/RunningData/ZhiNengDao/75to94-720P_32/images")
-    dp_output = Path("/d_disk/RunningData/ZhiNengDao/75to94-720P_32/glomap3r")
+    dp_images = Path("/d_disk/RunningData/ZhiNengDao/blob2/images")
+    dp_output = Path("/d_disk/RunningData/ZhiNengDao/blob2/glomap3r")
     fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
