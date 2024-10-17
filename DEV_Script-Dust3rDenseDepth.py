@@ -133,21 +133,25 @@ def get_reconstructed_scene(outdir, model, filelist, niter=300, min_conf_thr=3
     outfile, clean_depth_maps_pack = get_3D_model_from_scene(outdir, silent, scene, min_conf_thr, as_pointcloud,
                                                              mask_sky,
                                                              clean_depth, transparent_cams, cam_size)
+
+    dp_depthmaps = outdir / "depthmaps3r"
+    dp_depthmaps.mkdir(parents=True, exist_ok=True)
     # =========== Double Check the DepthMap ===============
-    for idx, clean_depth_map in enumerate(clean_depth_maps_pack):
-        current_img = to_numpy(scene.imgs[idx])
-        current_depth = clean_depth_map
-        pts, cols = depth_map_to_3D_points(current_depth, current_img, to_numpy(scene.get_focals()[idx][0]).item())
-        write_ply(outdir / f"scene_{idx}-clean-reproj.ply", pts.reshape(-1, 3), cols.reshape(-1, 3))
-        # Interpolate image
-        current_img_ori = interpolate_array(current_img, size=ori_img_size, mode='nearest')
-
-        # Interpolate depth map
-        current_depth_ori = interpolate_array(current_depth, size=ori_img_size, mode='nearest')
-
-        focal_ori = to_numpy(scene.get_focals()[idx][0]).item() * (max(ori_img_size) / image_size)
-        pts_ori, cols_ori = depth_map_to_3D_points(current_depth_ori, current_img_ori, focal_ori)
-        write_ply(outdir / f"scene_{idx}-clean-reproj-nn_ori.ply", pts_ori.reshape(-1, 3), cols_ori.reshape(-1, 3))
+    # TODO: make it a debug function, and maybe used in the future.
+    # for idx, clean_depth_map in enumerate(clean_depth_maps_pack):
+    #     current_img = to_numpy(scene.imgs[idx])
+    #     current_depth = clean_depth_map
+    #     pts, cols = depth_map_to_3D_points(current_depth, current_img, to_numpy(scene.get_focals()[idx][0]).item())
+    #     write_ply(outdir / f"scene_{idx}-clean-reproj.ply", pts.reshape(-1, 3), cols.reshape(-1, 3))
+    #     # Interpolate image
+    #     current_img_ori = interpolate_array(current_img, size=ori_img_size, mode='nearest')
+    #
+    #     # Interpolate depth map
+    #     current_depth_ori = interpolate_array(current_depth, size=ori_img_size, mode='nearest')
+    #
+    #     focal_ori = to_numpy(scene.get_focals()[idx][0]).item() * (max(ori_img_size) / image_size)
+    #     pts_ori, cols_ori = depth_map_to_3D_points(current_depth_ori, current_img_ori, focal_ori)
+    #     write_ply(outdir / f"scene_{idx}-clean-reproj-nn_ori.ply", pts_ori.reshape(-1, 3), cols_ori.reshape(-1, 3))
 
     # also return rgb, depth and confidence imgs
     # depth is normalized with the max value for all images
@@ -193,8 +197,8 @@ def get_reconstructed_scene(outdir, model, filelist, niter=300, min_conf_thr=3
         pts, cols = depth_map_to_3D_points(current_depth_ori_raw, current_img_ori, focal)
         write_ply(outdir / f"scene_{idx}-raw.ply", pts.reshape(-1, 3), cols.reshape(-1, 3))
 
-        # Write Raw Depths Out
-        write_array(dep, outdir / f"{filelist.stem}.bin")
+        # Write Ori Raw Depths Out
+        write_array(current_depth_ori_raw, dp_depthmaps / f"{Path(filelist[idx]).stem}.bin")
 
     return scene, outfile, imgs
 
