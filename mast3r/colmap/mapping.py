@@ -94,9 +94,12 @@ def run_mast3r_matching(model: AsymmetricMASt3R, maxdim: int, patch_size: int, d
         }
 
     # compute 2D-2D matching from dust3r inference
-    for chunk in tqdm(range(0, len(matching_pairs), 4)):
-        pairs_chunk = matching_pairs[chunk:chunk + 4]
-        output = inference(pairs_chunk, model, device, batch_size=1, verbose=False)
+    # TODO: here the pts3D is already generated, perhaps dense depth map can be further generated as well
+    # TODO: the confidence lower by observing or hindering, inler points or outer points, might work.
+    chunk_size = 4
+    for chunk in tqdm(range(0, len(matching_pairs), chunk_size)):
+        pairs_chunk = matching_pairs[chunk:chunk + chunk_size]
+        output = inference(pairs_chunk, model, device, batch_size=4, verbose=False)
         pred1, pred2 = output['pred1'], output['pred2']
         # TODO handle caching
         im_images_chunk = get_im_matches(pred1, pred2, pairs_chunk, image_to_colmap,

@@ -47,7 +47,7 @@ def get_reconstructed_scene(outdir, model, filelist, niter=300, min_conf_thr=3,
         imgs[1]['idx'] = 1
 
     pairs = make_pairs(imgs, scene_graph=scenegraph_type, prefilter=None, symmetrize=True)
-    output = inference(pairs, model, device, batch_size=1, verbose=not silent)
+    output = inference(pairs, model, device, batch_size=4, verbose=not silent)
 
     mode = GlobalAlignerMode.PointCloudOptimizer if len(imgs) > 2 else GlobalAlignerMode.PairViewer
     scene = global_aligner(output, device=device, mode=mode, verbose=not silent)
