@@ -23,9 +23,10 @@ from typing import List, Tuple, Union
 
 from mast3r.model import AsymmetricMASt3R
 from mast3r.colmap.database import export_matches, get_im_matches
-
+from dust3rDir.dust3r.utils.device import to_numpy
 import mast3r.utils.path_to_dust3r  # noqa
 from dust3rDir.dust3r_visloc.datasets.utils import get_resize_function
+from dust3rDir.dust3r.cloud_opt import global_aligner, GlobalAlignerMode
 
 import kapture
 from kapture.converter.colmap.database_extra import get_colmap_camera_ids_from_db, get_colmap_image_ids_from_db
@@ -101,22 +102,69 @@ def run_mast3r_matching(model: AsymmetricMASt3R, maxdim: int, patch_size: int, d
     # compute 2D-2D matching from dust3r inference
     # TODO: here the pts3D is already generated, perhaps dense depth map can be further generated as well
     # TODO: the confidence lower by observing or hindering, inler points or outer points, might work.
-    chunk_size = 4
+    chunk_size = 12
+    silent = False
+    niter = 100
     for chunk in tqdm(range(0, len(matching_pairs), chunk_size)):
         pairs_chunk = matching_pairs[chunk:chunk + chunk_size]
-        output = inference(pairs_chunk, model, device, batch_size=4, verbose=False)
+        output = inference(pairs_chunk, model, device, batch_size=12, verbose=not silent)
         pred1, pred2 = output['pred1'], output['pred2']
         # TODO handle caching
         im_images_chunk = get_im_matches(pred1, pred2, pairs_chunk, image_to_colmap,
                                          im_keypoints, conf_thr, not dense_matching, pixel_tol)
         im_matches.update(im_images_chunk.items())
 
+        # Generate Dense Depth Using Dust3r
+        mode = GlobalAlignerMode.PointCloudOptimizer if chunk_size > 2 else GlobalAlignerMode.PairViewer
+        scene = global_aligner(output, device=device, mode=mode, verbose=not silent)
+        # PointCloudOptimizer by Default
+        lr = 0.01
+
+        if mode == GlobalAlignerMode.PointCloudOptimizer:
+            loss = scene.compute_global_alignment(init='mst', niter=niter, schedule='linear', lr=lr)
+        # TODO: set a chunk outdir, can be upto 12 imgs, or say, blobs
+        outfile, clean_depth_maps_pack = get_3D_model_from_scene(outdir, silent, scene,
+                                                                 min_conf_thr=3, as_pointcloud=False,
+                                                                 mask_sky=False,
+                                                                 clean_depth=True,
+                                                                 transparent_cams=False,
+                                                                 cam_size=0.05)
+        # min_conf_thr=3, as_pointcloud=False, mask_sky=False,
+        # clean_depth=False, transparent_cams=False, cam_size=0.05
     # filter matches, convert them and export keypoints and matches to colmap db
     colmap_image_pairs = export_matches(
         colmap_db, images, image_to_colmap, im_keypoints, im_matches, min_len_track, skip_geometric_verification)
     colmap_db.commit()
 
     return colmap_image_pairs
+
+
+def get_3D_model_from_scene(outdir, silent, scene, min_conf_thr=3, as_pointcloud=False, mask_sky=False,
+                            clean_depth=False, transparent_cams=False, cam_size=0.05):
+    """
+    extract 3D_model (glb file) from a reconstructed scene
+    """
+    if scene is None:
+        return None
+    # post processes
+    if clean_depth:
+        scene = scene.clean_pointcloud()
+    if mask_sky:
+        scene = scene.mask_sky()
+    # get optimized values from scene
+    rgbimg = scene.imgs
+    focals = scene.get_focals().cpu()
+    cams2world = scene.get_im_poses().cpu()
+    # 3D pointcloud from depthmap, poses and intrinsics
+    pts3d = to_numpy(scene.get_pts3d())
+    scene.min_conf_thr = float(scene.conf_trf(torch.tensor(min_conf_thr)))
+    msk = to_numpy(scene.get_masks())
+    outfile, clean_depth_maps_reproj = _convert_scene_output_to_glb(
+        outdir, rgbimg, pts3d, msk, focals, cams2world,
+        as_pointcloud=as_pointcloud,
+        transparent_cams=transparent_cams, cam_size=cam_size, silent=silent
+    )
+    return outfile, clean_depth_maps_reproj
 
 
 def pycolmap_run_triangulator(colmap_db_path, prior_recon_path, recon_path, image_root_path):
