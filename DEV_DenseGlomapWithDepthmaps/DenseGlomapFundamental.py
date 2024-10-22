@@ -176,6 +176,8 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
     colmap_image_pairs = export_matches(
         colmap_db, images, image_to_colmap, im_keypoints, im_matches, min_len_track, skip_geometric_verification)
     colmap_db.commit()
+    # Clear GPU Cache for Next
+    torch.cuda.empty_cache()
 
     return colmap_image_pairs
 
