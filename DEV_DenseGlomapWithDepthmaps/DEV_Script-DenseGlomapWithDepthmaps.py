@@ -11,7 +11,7 @@ LinkedIn: https://be.linkedin.com/in/xuanlichen
 import os
 import shutil
 import tempfile
-
+from tqdm import tqdm
 import PIL.Image
 import numpy as np
 import pycolmap
@@ -25,10 +25,14 @@ from dust3rDir.dust3r.utils.image import load_images
 from DenseGlomapFundamental import kapture_import_image_folder_or_list, run_mast3r_matching, glomap_run_mapper
 from mast3r.image_pairs import make_pairs
 
+from EssentialCOLMapper import COLMapper3rBlobs
+
 class BlobDivider(object):
     def __init__(self, dp_input):
         self.fps_all_images = list(dp_input.glob("*.jpg")) + list(dp_input.glob("*.png")) + list(dp_input.glob("*.jpeg"))
-
+        self.fps_all_images.sort()
+        # in new version of time-format, by sort itself, images would be in time sequence.
+        #   Details check: https://www.notion.so/Run-though-the-Vehicle-dataset-12e8ff7304658073ab76c5a7bf48f86f?pvs=4
         self.fps2ids = {fp: idx for idx, fp in enumerate(self.fps_all_images)}
         self.ids2fps = {idx: fp for idx, fp in enumerate(self.fps_all_images)}
 
@@ -43,8 +47,9 @@ class BlobDivider(object):
         """
         timestamps = {}
         for idx, image in enumerate(self.fps_all_images):
-            ts = int(image.name.split("_")[-1][5:-4])
+            ts = int(image.name.split("_")[0]) + int(image.name.split("_")[1]) / 1e9    # 1e9 is the nano-second
             timestamps[idx] = ts
+
         return timestamps
 
     def assign_each_img_to_its_ts_(self):
@@ -59,14 +64,14 @@ class BlobDivider(object):
 
         return ts_images
 
-    def get_blob_division(self, num_neighbor_ts=1):
+    def get_blob_division(self, num_neighbor_ts=(0, 1)):
         """
         Divide the images into blobs based on the timestamps.
         """
         blobs = {}
-        for idx in range(num_neighbor_ts, len(self.LIST_all_ts) - 1):
-            start_ts = self.LIST_all_ts[idx - num_neighbor_ts]
-            end_ts = self.LIST_all_ts[idx + num_neighbor_ts]
+        for idx in range(num_neighbor_ts[0], len(self.LIST_all_ts) - num_neighbor_ts[1]):
+            start_ts = self.LIST_all_ts[idx - num_neighbor_ts[0]]
+            end_ts = self.LIST_all_ts[idx + num_neighbor_ts[1]]
             LIST_blob_ts = [ts for ts in self.LIST_all_ts if start_ts <= ts <= end_ts]
             LIST_blob_img_fps = []
             for ts in LIST_blob_ts:
@@ -101,17 +106,19 @@ class GlomapReconState:
         self.outfile_name = None
 
 
+
+
 def get_reconstructed_scene(
         dp_output,
         model,
         filelist,
-        shared_intrinsics=False
+        shared_intrinsics=False,
+        silent=True
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
     then run get_3D_model_from_scene
     """
-    silent = False
     image_size = 512
     imgs = load_images(filelist, size=image_size, verbose=not silent)
     assert len(imgs) > 1, "Need at least 2 images to run reconstruction"
@@ -141,16 +148,17 @@ def get_reconstructed_scene(
     os.makedirs(os.path.dirname(colmap_db_path), exist_ok=True)
     colmap_db = COLMAPDatabase.connect(colmap_db_path)
     try:
+        # TODO: add the COLMAP-DSP mapper, which seems to be with good performance for the moment.
         kapture_to_colmap(kdata, root_path, tar_handler=None, database=colmap_db,
                           keypoints_type=None, descriptors_type=None, export_two_view_geometry=False)
         device = "cuda"
         # Comment: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
         dense_matching = True   # False
-        conf_thr = 1.001  # 1.001 previously
+        conf_thr = 1.001 # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(dp_output, model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
                                                  dense_matching, 5, conf_thr,
-                                                 False, 3)
+                                                 False, 3, silent=silent)
         colmap_db.close()
 
 
@@ -174,14 +182,14 @@ def get_reconstructed_scene(
     reconstruction_path = os.path.join(cache_dir, "reconstruction")
     if os.path.isdir(reconstruction_path):
         shutil.rmtree(reconstruction_path)
-    os.makedirs(reconstruction_path, exist_ok=True)
+    os.makedirs(reconstruction_path)
     glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
 
     outfile_name = tempfile.mktemp(suffix='_scene.glb', dir=dp_output)
 
     ouput_recon = pycolmap.Reconstruction(os.path.join(reconstruction_path, '0'))
     print(ouput_recon.summary())
-
+    # Export GLOMAP Reconstruction to 3D Model
     colmap_world_to_cam = {}
     colmap_intrinsics = {}
     colmap_image_id_to_name = {}
@@ -222,9 +230,14 @@ def get_reconstructed_scene(
 if __name__ == "__main__":
     from pathlib import Path
     from time import time
+    from datetime import datetime
+    # Get the current date and time
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    blob_params = (0, 1)
+    dp_images = Path("/d_disk/RunningData/Vehicle/undistorted_2024-10-28_15-27-53/DEVcache_sfm-frames_ts-3782_te-3786_int-2_num-372/images")
+    dp_output = Path(f"/d_disk/RunningData/Vehicle/undistorted_2024-10-28_15-27-53/DEVcache_sfm-frames_ts-3782_te-3786_int-2_num-372//blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}-GLOMAP_Conf1_001")
 
-    dp_images = Path("/d_disk/RunningData/ZhiNengDao/20-from-2075-to-94-720P_160/images")
-    dp_output = Path("/d_disk/RunningData/ZhiNengDao/20-from-2075-to-94-720P_160/blob3recon")
+    # ================================================================
     fps_images_all = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images_all) > 1, "Need at least 2 images to run reconstruction"
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
@@ -233,17 +246,33 @@ if __name__ == "__main__":
 
     # Analyze the time-stamps, each time feed 3 time stamps to the model
     bd_ins = BlobDivider(dp_images)
-    blobs = bd_ins.get_blob_division(num_neighbor_ts=1)
+    blobs = bd_ins.get_blob_division(num_neighbor_ts=blob_params)
+
+    DICT_blob_naive_mappers = {}
 
     for blob_idx, (start_ts, end_ts) in enumerate(blobs.keys()):
         start_time = time()
         print(f"Processing Blob: {blob_idx}")
         fps_images = blobs[(start_ts, end_ts)]
-        dp_output_blob = dp_output / f"blob_{blob_idx}-start{start_ts}_end{end_ts}"
+        dp_output_blob = dp_output / f"blob_{blob_idx:04d}-start{start_ts}_end{end_ts}"
         dp_output_blob.mkdir(parents=True, exist_ok=True)
+
+        dp_current_imgs = dp_output_blob / "images"
+        dp_current_imgs.mkdir(parents=True, exist_ok=True)
+
+        blob_filelist = []
+
+        for fp_image in fps_images:
+            shutil.copy(fp_image, dp_current_imgs / fp_image.name)
+            blob_filelist.append(dp_current_imgs / fp_image.name)
+
+        # Pre-warm with DSP-COLMAP
+        DICT_blob_naive_mappers[(start_ts, end_ts)] = COLMapper3rBlobs(dp_current_imgs, dp_output_blob / "cache-dsp")
+
         scene_state, outfile = get_reconstructed_scene(
             dp_output=dp_output_blob,
             model=model,
-            filelist=[fp.resolve().as_posix() for fp in fps_images],
+            filelist=[fp.resolve().as_posix() for fp in blob_filelist],
+            silent=True
         )
         print(f"Time taken for blob {blob_idx}: {time() - start_time} seconds.")

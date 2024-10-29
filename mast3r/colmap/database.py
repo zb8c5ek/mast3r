@@ -337,8 +337,8 @@ def export_matches(db, images, image_to_colmap, im_keypoints, im_matches, min_le
         [1 for v in track_id_to_kpt_list if len(v) >= min_len_track])
 
     keypoints_to_idx = {}
-    print(f"squashing keypoints - {num_valid_tracks} valid tracks")
-    for imidx, keypoints_imid in tqdm(im_keypoints.items()):
+
+    for imidx, keypoints_imid in tqdm(im_keypoints.items(), desc=f"squashing keypoints - {num_valid_tracks} valid tracks"):
         imid = image_to_colmap[imidx]['colmap_imid']
         keypoints_kept = []
         keypoints_to_idx[imidx] = {}

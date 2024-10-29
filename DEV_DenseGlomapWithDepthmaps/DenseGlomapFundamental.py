@@ -2,6 +2,7 @@ __author__ = 'Xuanli CHEN'
 
 import trimesh
 from scipy.spatial.transform import Rotation
+import struct
 from dust3rDir.dust3r.viz import CAM_COLORS, add_scene_cam, OPENGL
 
 """
@@ -28,7 +29,6 @@ import numpy as np
 from typing import List, Tuple, Union
 import torch
 import torch.nn.functional as F
-
 
 from mast3r.model import AsymmetricMASt3R
 from mast3r.colmap.database import export_matches, get_im_matches
@@ -83,7 +83,7 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
                         kdata: kapture.Kapture, root_path: str, image_pairs_kapture: List[Tuple[str, str]],
                         colmap_db,
                         dense_matching: bool, pixel_tol: int, conf_thr: float, skip_geometric_verification: bool,
-                        min_len_track: int):
+                        min_len_track: int, silent: bool):
     assert kdata.records_camera is not None
     image_paths = kdata.records_camera.data_list()
     image_path_to_idx = {image_path: idx for idx, image_path in enumerate(image_paths)}
@@ -114,10 +114,10 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
 
     # compute 2D-2D matching from dust3r inference
 
-    silent = False
-    niter = 100 # 100 or 300 the loss are just about 0.20 something.
+    niter = 100  # 100 or 300 the loss are just about 0.20 something.
+    batch_size = 12  # 12 is the maximum on a 16G machine.
 
-    output = inference(matching_pairs, model, device, batch_size=12, verbose=not silent)
+    output = inference(matching_pairs, model, device, batch_size=batch_size, verbose=not silent)
     pred1, pred2 = output['pred1'], output['pred2']
     # TODO handle caching
     im_images_chunk = get_im_matches(pred1, pred2, matching_pairs, image_to_colmap,
@@ -131,12 +131,15 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
     lr = 0.01
 
     if mode == GlobalAlignerMode.PointCloudOptimizer:
+        # TODO: make the loss schedualer, to determine empirically what would be a good niter.
         loss = scene.compute_global_alignment(init='mst', niter=niter, schedule='linear', lr=lr)
     # TODO: Follow up the depthmaps pipeline
-    # TODO: check about using mesh to project the points
+    # TODO: check about using mesh to project the points -> Do not do that. ray tracing is very slow.
+    as_mesh = False
+    as_pointcloud = not as_mesh
     outfile, clean_depth_maps_pack = get_3D_model_from_scene_d3r_dense(
         dp_output, silent, scene,
-        min_conf_thr=3, as_pointcloud=True,
+        min_conf_thr=3, as_pointcloud=as_pointcloud,
         mask_sky=False,
         clean_depth=True,
         transparent_cams=False,
@@ -161,17 +164,20 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
     for idx, clean_depth_map in enumerate(clean_depth_maps_pack):
         current_img = to_numpy(scene.imgs[idx])
         current_depth = clean_depth_map
-        pts, cols = depth_map_to_3D_points(current_depth, current_img, to_numpy(scene.get_focals()[idx][0]).item())
-        write_ply(dp_cache_pc / f"scene_{idx}-clean-reproj.ply", pts.reshape(-1, 3), cols.reshape(-1, 3))
-        # Interpolate image
-        current_img_ori = interpolate_array(current_img, size=ori_img_size, mode='nearest')
-
         # Interpolate depth map
         current_depth_ori = interpolate_array(current_depth, size=ori_img_size, mode='nearest')
+        # Save Depth Maps
+        write_array(
+            current_depth_ori, dp_depthmaps / f"{Path(image_paths[idx]).stem}.bin"
+        )
 
-        focal_ori = to_numpy(scene.get_focals()[idx][0]).item() * (max(ori_img_size) / maxdim)
-        pts_ori, cols_ori = depth_map_to_3D_points(current_depth_ori, current_img_ori, focal_ori)
-        write_ply(dp_cache_pc / f"scene_{idx}-clean-reproj-nn_ori.ply", pts_ori.reshape(-1, 3), cols_ori.reshape(-1, 3))
+        if not silent:
+            pts, cols = depth_map_to_3D_points(current_depth, current_img, to_numpy(scene.get_focals()[idx][0]).item())
+            write_ply(dp_cache_pc / f"scene_{idx}-clean-reproj.ply", pts.reshape(-1, 3), cols.reshape(-1, 3))
+            current_img_ori = interpolate_array(current_img, size=ori_img_size, mode='nearest')
+            focal_ori = to_numpy(scene.get_focals()[idx][0]).item() * (max(ori_img_size) / maxdim)
+            pts_ori, cols_ori = depth_map_to_3D_points(current_depth_ori, current_img_ori, focal_ori)
+            write_ply(dp_cache_pc / f"scene_{idx}-clean-reproj-nn_ori.ply", pts_ori.reshape(-1, 3), cols_ori.reshape(-1, 3))
     # filter matches, convert them and export keypoints and matches to colmap db
     colmap_image_pairs = export_matches(
         colmap_db, images, image_to_colmap, im_keypoints, im_matches, min_len_track, skip_geometric_verification)
@@ -180,7 +186,6 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
     torch.cuda.empty_cache()
 
     return colmap_image_pairs
-
 
 
 def pycolmap_run_triangulator(colmap_db_path, prior_recon_path, recon_path, image_root_path):
@@ -226,6 +231,40 @@ def glomap_run_mapper(glomap_bin, colmap_db_path, recon_path, image_root_path):
         raise ValueError(
             '\nSubprocess Error (Return code:'
             f' {glomap_process.returncode} )')
+
+
+def write_array(array, path):
+    """
+    see: src/mvs/mat.h
+        void Mat<T>::Write(const std::string& path)
+    """
+    assert array.dtype == np.float32
+    if len(array.shape) == 2:
+        height, width = array.shape
+        channels = 1
+    elif len(array.shape) == 3:
+        height, width, channels = array.shape
+    else:
+        assert False
+
+    with open(path, "w") as fid:
+        fid.write(str(width) + "&" + str(height) + "&" + str(channels) + "&")
+
+    with open(path, "ab") as fid:
+        if len(array.shape) == 2:
+            array_trans = np.transpose(array, (1, 0))
+        elif len(array.shape) == 3:
+            array_trans = np.transpose(array, (1, 0, 2))
+        else:
+            assert False
+        data_1d = array_trans.reshape(-1, order="F")
+        data_list = data_1d.tolist()
+        endian_character = "<"
+        format_char_sequence = "".join(["f"] * len(data_list))
+        byte_data = struct.pack(
+            endian_character + format_char_sequence, *data_list
+        )
+        fid.write(byte_data)
 
 
 def kapture_import_image_folder_or_list(images_path: Union[str, Tuple[str, List[str]]],
@@ -377,7 +416,7 @@ def _convert_scene_output_to_glb(outdir, imgs, pts3d, mask, focals, cams2world, 
     scene = trimesh.Scene()
 
     # full pointcloud
-
+    # TODO: generate both meshes and point clouds, firstly project the point clouds.
     if as_pointcloud:
         pts = np.concatenate([p[m] for p, m in zip(pts3d, mask)])
         col = np.concatenate([p[m] for p, m in zip(imgs, mask)])
@@ -388,9 +427,11 @@ def _convert_scene_output_to_glb(outdir, imgs, pts3d, mask, focals, cams2world, 
         meshes = []
         for i in range(len(imgs)):
             meshes.append(pts3d_to_trimesh(imgs[i], pts3d[i], mask[i]))
+            # TODO: using trimesh to project the points
         mesh = trimesh.Trimesh(**cat_meshes(meshes))
         scene.add_geometry(mesh)
         clean_depth_maps, LIST_pts_valid = None, None
+
 
     # add each camera
     for i, pose_c2w in enumerate(cams2world):
@@ -504,7 +545,7 @@ def pts3d_to_trimesh(img, pts3d, valid=None):
 
 def cat_meshes(meshes):
     vertices, faces, colors = zip(*[(m['vertices'], m['faces'], m['face_colors']) for m in meshes])
-    n_vertices = np.cumsum([0]+[len(v) for v in vertices])
+    n_vertices = np.cumsum([0] + [len(v) for v in vertices])
     for i in range(len(faces)):
         faces[i][:] += n_vertices[i]
 
@@ -512,6 +553,7 @@ def cat_meshes(meshes):
     colors = np.concatenate(colors)
     faces = np.concatenate(faces)
     return dict(vertices=vertices, face_colors=colors, faces=faces)
+
 
 def interpolate_array(array, size, mode='nearest'):
     """
@@ -538,6 +580,7 @@ def interpolate_array(array, size, mode='nearest'):
         0).squeeze(0).numpy()
 
     return interpolated_array
+
 
 def depth_map_to_3D_points(depth_map, img_rgb, focal_length, principal_point=None):
     """
