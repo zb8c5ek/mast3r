@@ -113,7 +113,8 @@ def get_reconstructed_scene(
         model,
         filelist,
         shared_intrinsics=False,
-        silent=True
+        silent=True,
+        skip_GLOMAP=False
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
@@ -182,49 +183,89 @@ def get_reconstructed_scene(
     reconstruction_path = os.path.join(cache_dir, "reconstruction")
     if os.path.isdir(reconstruction_path):
         shutil.rmtree(reconstruction_path)
-    os.makedirs(reconstruction_path)
-    glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
 
-    outfile_name = tempfile.mktemp(suffix='_scene.glb', dir=dp_output)
+    if not skip_GLOMAP:
+        os.makedirs(reconstruction_path)
+        glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
 
-    ouput_recon = pycolmap.Reconstruction(os.path.join(reconstruction_path, '0'))
-    print(ouput_recon.summary())
-    # Export GLOMAP Reconstruction to 3D Model
-    colmap_world_to_cam = {}
-    colmap_intrinsics = {}
-    colmap_image_id_to_name = {}
-    images = {}
-    num_reg_images = ouput_recon.num_reg_images()
-    for idx, (colmap_imgid, colmap_image) in enumerate(ouput_recon.images.items()):
-        colmap_image_id_to_name[colmap_imgid] = colmap_image.name
-        if callable(colmap_image.cam_from_world.matrix):
-            colmap_world_to_cam[colmap_imgid] = colmap_image.cam_from_world.matrix(
-            )
+        outfile_name = tempfile.mktemp(suffix='_scene.glb', dir=dp_output)
+
+        ouput_recon = pycolmap.Reconstruction(os.path.join(reconstruction_path, '0'))
+        print(ouput_recon.summary())
+        # Export GLOMAP Reconstruction to 3D Model
+        colmap_world_to_cam = {}
+        colmap_intrinsics = {}
+        colmap_image_id_to_name = {}
+        images = {}
+        num_reg_images = ouput_recon.num_reg_images()
+        for idx, (colmap_imgid, colmap_image) in enumerate(ouput_recon.images.items()):
+            colmap_image_id_to_name[colmap_imgid] = colmap_image.name
+            if callable(colmap_image.cam_from_world.matrix):
+                colmap_world_to_cam[colmap_imgid] = colmap_image.cam_from_world.matrix(
+                )
+            else:
+                colmap_world_to_cam[colmap_imgid] = colmap_image.cam_from_world.matrix
+            camera = ouput_recon.cameras[colmap_image.camera_id]
+            K = np.eye(3)
+            K[0, 0] = camera.focal_length_x
+            K[1, 1] = camera.focal_length_y
+            K[0, 2] = camera.principal_point_x
+            K[1, 2] = camera.principal_point_y
+            colmap_intrinsics[colmap_imgid] = K
+
+            with PIL.Image.open(os.path.join(root_path, colmap_image.name)) as im:
+                images[colmap_imgid] = np.asarray(im)
+
+            if idx + 1 == num_reg_images:
+                break  # bug with the iterable ?
+        points3D = []
+        num_points3D = ouput_recon.num_points3D()
+        for idx, (pt3d_id, pts3d) in enumerate(ouput_recon.points3D.items()):
+            points3D.append((pts3d.xyz, pts3d.color))
+            if idx + 1 == num_points3D:
+                break  # bug with the iterable ?
+        scene = GlomapRecon(colmap_world_to_cam, colmap_intrinsics, points3D, images)
+        scene_state = GlomapReconState(scene, False, cache_dir, outfile_name)
+        outfile = get_3D_model_from_scene(silent, scene_state)
+    # return scene_state, outfile
+
+
+def tell_whether_it_belongs_to_the_sling(fp_image):
+
+    ts, ns, stem, stem_1, rot_angle, ts_raw = fp_image.name.split("_")
+
+    slings = [stem]
+
+    if stem == "front":
+        if rot_angle.startswith('-'):
+            slings.append("right")
         else:
-            colmap_world_to_cam[colmap_imgid] = colmap_image.cam_from_world.matrix
-        camera = ouput_recon.cameras[colmap_image.camera_id]
-        K = np.eye(3)
-        K[0, 0] = camera.focal_length_x
-        K[1, 1] = camera.focal_length_y
-        K[0, 2] = camera.principal_point_x
-        K[1, 2] = camera.principal_point_y
-        colmap_intrinsics[colmap_imgid] = K
+            angle = int(rot_angle)
+            if angle > 0:
+                slings.append("left")
+    elif stem == "left":
+        if rot_angle.startswith('-'):
+            slings.append("front")
+        else:
+            angle = int(rot_angle)
+            if angle > 0:
+                slings.append("rear")
+    elif stem == "right":
+        if rot_angle.startswith('-'):
+            slings.append("rear")
+        else:
+            angle = int(rot_angle)
+            if angle > 0:
+                slings.append("front")
+    elif stem == "rear":
+        if rot_angle.startswith('-'):
+            slings.append("left")
+        else:
+            angle = int(rot_angle)
+            if angle > 0:
+                slings.append("right")
 
-        with PIL.Image.open(os.path.join(root_path, colmap_image.name)) as im:
-            images[colmap_imgid] = np.asarray(im)
-
-        if idx + 1 == num_reg_images:
-            break  # bug with the iterable ?
-    points3D = []
-    num_points3D = ouput_recon.num_points3D()
-    for idx, (pt3d_id, pts3d) in enumerate(ouput_recon.points3D.items()):
-        points3D.append((pts3d.xyz, pts3d.color))
-        if idx + 1 == num_points3D:
-            break  # bug with the iterable ?
-    scene = GlomapRecon(colmap_world_to_cam, colmap_intrinsics, points3D, images)
-    scene_state = GlomapReconState(scene, False, cache_dir, outfile_name)
-    outfile = get_3D_model_from_scene(silent, scene_state)
-    return scene_state, outfile
+    return slings
 
 
 if __name__ == "__main__":
@@ -233,10 +274,14 @@ if __name__ == "__main__":
     from datetime import datetime
     # Get the current date and time
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    blob_params = (0, 1)
-    dp_images = Path("/d_disk/RunningData/Vehicle/undistorted_2024-10-28_15-27-53/DEVcache_sfm-frames_ts-3782_te-3786_int-2_num-372/images")
-    dp_output = Path(f"/d_disk/RunningData/Vehicle/undistorted_2024-10-28_15-27-53/DEVcache_sfm-frames_ts-3782_te-3786_int-2_num-372//blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}-GLOMAP_Conf1_001")
-
+    blob_params = (1, 1)
+    dp_images = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-29_16-22-59/DEVcache_sfm-frames_ts-2467_te-2482_int-4_num-480/images")
+    dp_output = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-29_16-22-59/DEVcache_sfm-frames_ts-2467_te-2482_int-4_num-480/blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}-GLOMAP_Conf1_001")
+    # TODO: make it a config file, and run from there.
+    FLAG_ohne_rear = True
+    FLAG_all_mappings = False
+    FLAG_skip_GLOMAP = True
+    CHOICE_blob_mode = ['360']   # ['sling', '360']
     # ================================================================
     fps_images_all = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images_all) > 1, "Need at least 2 images to run reconstruction"
@@ -247,32 +292,55 @@ if __name__ == "__main__":
     # Analyze the time-stamps, each time feed 3 time stamps to the model
     bd_ins = BlobDivider(dp_images)
     blobs = bd_ins.get_blob_division(num_neighbor_ts=blob_params)
+    if FLAG_all_mappings:
+        DICT_blob_sparse_mapper = COLMapper3rBlobs(dp_images, dp_images.parent / "cache-sparse-all")
 
-    DICT_blob_naive_mappers = {}
-
-    for blob_idx, (start_ts, end_ts) in enumerate(blobs.keys()):
+    for blob_idx, (start_ts, end_ts) in tqdm(enumerate(blobs.keys()), total=len(blobs)):
         start_time = time()
         print(f"Processing Blob: {blob_idx}")
         fps_images = blobs[(start_ts, end_ts)]
-        dp_output_blob = dp_output / f"blob_{blob_idx:04d}-start{start_ts}_end{end_ts}"
+        blob_mode_str = '-'.join(CHOICE_blob_mode)
+        dp_output_blob = dp_output / f"blob_{blob_idx:04d}-{blob_mode_str}-start{start_ts}_end{end_ts}"
         dp_output_blob.mkdir(parents=True, exist_ok=True)
-
-        dp_current_imgs = dp_output_blob / "images"
-        dp_current_imgs.mkdir(parents=True, exist_ok=True)
-
-        blob_filelist = []
-
+        dp_blob_images = dp_output_blob / "images"
+        dp_blob_images.mkdir(parents=True, exist_ok=True)
+        fps_blob_images = []
         for fp_image in fps_images:
-            shutil.copy(fp_image, dp_current_imgs / fp_image.name)
-            blob_filelist.append(dp_current_imgs / fp_image.name)
+            if FLAG_ohne_rear and "rear" in fp_image.name:
+                continue
+            shutil.copy(fp_image, dp_blob_images / fp_image.name)
+            fps_blob_images.append(dp_blob_images / fp_image.name)
 
-        # Pre-warm with DSP-COLMAP
-        DICT_blob_naive_mappers[(start_ts, end_ts)] = COLMapper3rBlobs(dp_current_imgs, dp_output_blob / "cache-dsp")
+        # Dense Recon for the 360
+        if "360" in CHOICE_blob_mode:
+            get_reconstructed_scene(
+                dp_output=dp_output_blob,
+                model=model,
+                filelist=[fp.resolve().as_posix() for fp in fps_blob_images],
+                silent=True,
+                skip_GLOMAP=FLAG_skip_GLOMAP
+            )
+            print(f"Time taken for blob {blob_idx}: {time() - start_time} seconds.")
 
-        scene_state, outfile = get_reconstructed_scene(
-            dp_output=dp_output_blob,
-            model=model,
-            filelist=[fp.resolve().as_posix() for fp in blob_filelist],
-            silent=True
-        )
-        print(f"Time taken for blob {blob_idx}: {time() - start_time} seconds.")
+        # Dense Recon for the Sling
+        if "sling" in CHOICE_blob_mode:
+            for blob_sline_stem in ['front', 'left', 'right']:  # 'rear' is ignored for now.
+                dp_blob_sling = dp_output_blob / blob_sline_stem
+                dp_blob_sling.mkdir(parents=True, exist_ok=True)
+
+                dp_blob_sling_imgs = dp_blob_sling / "images"
+                dp_blob_sling_imgs.mkdir(parents=True, exist_ok=True)
+                fps_blob_sling_images = []
+
+                for fp_image in fps_blob_images:
+                    if blob_sline_stem in tell_whether_it_belongs_to_the_sling(fp_image):
+                        shutil.copy(fp_image, dp_blob_sling_imgs / fp_image.name)
+                        fps_blob_sling_images.append(dp_blob_sling_imgs / fp_image.name)
+
+                get_reconstructed_scene(
+                    dp_output=dp_blob_sling,
+                    model=model,
+                    filelist=[fp.resolve().as_posix() for fp in fps_blob_sling_images],
+                    silent=True
+                )
+                print(f"Time taken for blob {blob_idx}: {time() - start_time} seconds.")

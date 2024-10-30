@@ -82,6 +82,6 @@ class COLMapper3rBlobs:
                 f"--path {dpm.as_posix()} "
             )
             result_analyze = subprocess.run(cmd_analyze, shell=True, check=True, capture_output=True, text=True)
-            print("Model Analyzer Output:", result_analyze.stdout)
-            print("Model Analyzer Errors:", result_analyze.stderr)
+            print("Model %i Analyzer Output:" % i, result_analyze.stdout)
+            print("Model Errors:", result_analyze.stderr)
             self._model_report = result_analyze.stdout
