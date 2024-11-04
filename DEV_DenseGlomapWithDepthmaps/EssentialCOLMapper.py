@@ -8,7 +8,7 @@ Research Domain: Computer Vision, Machine Learning
 Email: xuanli(dot)chen(at)icloud.com
 LinkedIn: https://be.linkedin.com/in/xuanlichen
 """
-class COLMapper3rBlobs:
+class COLMapper3r:
 
     def __init__(self, dp_blob, dp_output):
         self.colmap_cmd = 'colmap'
@@ -67,7 +67,7 @@ class COLMapper3rBlobs:
             f"--database_path {fp_db.as_posix()} "
             f"--image_path {self.dp_blob.as_posix()} "
             f"--output_path {dp_recon.as_posix()} "
-            f"--Mapper.multiple_models 0 "
+            f"--Mapper.multiple_models 1 "
         )
         result_mapper = subprocess.run(cmd_mapper, shell=True, check=True, capture_output=True, text=True)
         print("Mapper Output:", result_mapper.stdout)

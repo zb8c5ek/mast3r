@@ -1,5 +1,7 @@
 __author__ = 'Xuanli CHEN'
 
+from tensorboard.compat.tensorflow_stub.error_codes import UNIMPLEMENTED
+
 from DEV_DenseGlomapWithDepthmaps.DenseGlomapFundamental import get_3D_model_from_scene
 
 """
@@ -25,7 +27,7 @@ from dust3rDir.dust3r.utils.image import load_images
 from DenseGlomapFundamental import kapture_import_image_folder_or_list, run_mast3r_matching, glomap_run_mapper
 from mast3r.image_pairs import make_pairs
 
-from EssentialCOLMapper import COLMapper3rBlobs
+from EssentialCOLMapper import COLMapper3r
 
 class BlobDivider(object):
     def __init__(self, dp_input):
@@ -180,11 +182,12 @@ def get_reconstructed_scene(
     f.close()
     pycolmap.verify_matches(colmap_db_path, cache_dir.as_posix() + '/pairs.txt')
 
-    reconstruction_path = os.path.join(cache_dir, "reconstruction")
-    if os.path.isdir(reconstruction_path):
-        shutil.rmtree(reconstruction_path)
 
     if not skip_GLOMAP:
+
+        reconstruction_path = os.path.join(cache_dir, "reconstruction")
+        if os.path.isdir(reconstruction_path):
+            shutil.rmtree(reconstruction_path)
         os.makedirs(reconstruction_path)
         glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
 
@@ -224,9 +227,14 @@ def get_reconstructed_scene(
             points3D.append((pts3d.xyz, pts3d.color))
             if idx + 1 == num_points3D:
                 break  # bug with the iterable ?
-        scene = GlomapRecon(colmap_world_to_cam, colmap_intrinsics, points3D, images)
-        scene_state = GlomapReconState(scene, False, cache_dir, outfile_name)
-        outfile = get_3D_model_from_scene(silent, scene_state)
+        try:
+            scene = GlomapRecon(colmap_world_to_cam, colmap_intrinsics, points3D, images)
+            scene_state = GlomapReconState(scene, False, cache_dir, outfile_name)
+            outfile = get_3D_model_from_scene(silent, scene_state)
+        except Exception as e:
+            print(f'Error {e}')
+            scene_state = None
+            outfile = None
     # return scene_state, outfile
 
 
@@ -275,17 +283,22 @@ if __name__ == "__main__":
     # Get the current date and time
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     blob_params = (1, 1)
-    dp_images = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-29_16-22-59/DEVcache_sfm-frames_ts-2467_te-2482_int-4_num-480/images")
-    dp_output = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-29_16-22-59/DEVcache_sfm-frames_ts-2467_te-2482_int-4_num-480/blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}-GLOMAP_Conf1_001")
+    dp_images = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-31_18-42-24/DEVcache_sfm-frames_ts-2460_te-2482_int-4_num-672/images")
+    CHOICE_blob_mode = ['360']   # ['sling', '360'] # ONLY One is Supperted for Now.
+    if len(CHOICE_blob_mode) > 1:
+        raise UNIMPLEMENTED("Only One Mode is Supported for Now.")
+    # model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+    model_name = "DUSt3R_ViTLarge_BaseDecoder_512_dpt"
+    dp_output = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-31_18-42-24/DEVcache_sfm-frames_ts-2460_te-2482_int-4_num-672/{model_name.split('_')[0]}_blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}_{CHOICE_blob_mode[0]}")
     # TODO: make it a config file, and run from there.
     FLAG_ohne_rear = True
-    FLAG_all_mappings = False
-    FLAG_skip_GLOMAP = True
-    CHOICE_blob_mode = ['360']   # ['sling', '360']
+    FLAG_all_mappings = True
+    FLAG_skip_GLOMAP = False
+    FLAG_silent = True
     # ================================================================
     fps_images_all = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images_all) > 1, "Need at least 2 images to run reconstruction"
-    model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+
     weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
     model = AsymmetricMASt3R.from_pretrained(weights_path).to('cuda')
 
@@ -293,7 +306,9 @@ if __name__ == "__main__":
     bd_ins = BlobDivider(dp_images)
     blobs = bd_ins.get_blob_division(num_neighbor_ts=blob_params)
     if FLAG_all_mappings:
-        DICT_blob_sparse_mapper = COLMapper3rBlobs(dp_images, dp_images.parent / "cache-sparse-all")
+        # TODO: mappinf all in the sling use some CPUs in the background, when blobs finish processing, join them.
+        # COLMAPPer can first load the models to see performance first.
+        DICT_blob_sparse_mapper = COLMapper3r(dp_images, dp_images.parent / "cache-sparse-all")
 
     for blob_idx, (start_ts, end_ts) in tqdm(enumerate(blobs.keys()), total=len(blobs)):
         start_time = time()
@@ -317,14 +332,14 @@ if __name__ == "__main__":
                 dp_output=dp_output_blob,
                 model=model,
                 filelist=[fp.resolve().as_posix() for fp in fps_blob_images],
-                silent=True,
+                silent=FLAG_silent,
                 skip_GLOMAP=FLAG_skip_GLOMAP
             )
             print(f"Time taken for blob {blob_idx}: {time() - start_time} seconds.")
 
         # Dense Recon for the Sling
         if "sling" in CHOICE_blob_mode:
-            for blob_sline_stem in ['front', 'left', 'right']:  # 'rear' is ignored for now.
+            for blob_sline_stem in ['front', 'left', 'right']:  # 'rear' is ignored for now. by FLAG_ohne_rear
                 dp_blob_sling = dp_output_blob / blob_sline_stem
                 dp_blob_sling.mkdir(parents=True, exist_ok=True)
 
@@ -341,6 +356,7 @@ if __name__ == "__main__":
                     dp_output=dp_blob_sling,
                     model=model,
                     filelist=[fp.resolve().as_posix() for fp in fps_blob_sling_images],
-                    silent=True
+                    silent=FLAG_silent,
+                    skip_GLOMAP=FLAG_skip_GLOMAP
                 )
                 print(f"Time taken for blob {blob_idx}: {time() - start_time} seconds.")

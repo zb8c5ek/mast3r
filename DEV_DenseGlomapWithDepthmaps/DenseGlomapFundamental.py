@@ -114,7 +114,7 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
 
     # compute 2D-2D matching from dust3r inference
 
-    niter = 100  # 100 or 300 the loss are just about 0.20 something.
+    niter = 300  # 100 or 300 the loss are just about 0.20 something.
     batch_size = 12  # 12 is the maximum on a 16G machine.
 
     output = inference(matching_pairs, model, device, batch_size=batch_size, verbose=not silent)
@@ -133,11 +133,10 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
     if mode == GlobalAlignerMode.PointCloudOptimizer:
         # TODO: make the loss schedualer, to determine empirically what would be a good niter.
         loss = scene.compute_global_alignment(init='mst', niter=niter, schedule='linear', lr=lr)
-    # TODO: Follow up the depthmaps pipeline
-    # TODO: check about using mesh to project the points -> Do not do that. ray tracing is very slow.
+
     as_mesh = False
     as_pointcloud = not as_mesh
-    outfile, clean_depth_maps_pack = get_3D_model_from_scene_d3r_dense(
+    outfile, clean_depth_maps_pack, raw_depth_pack = get_3D_model_from_scene_d3r_dense(
         dp_output, silent, scene,
         min_conf_thr=3, as_pointcloud=as_pointcloud,
         mask_sky=False,
@@ -183,6 +182,23 @@ def run_mast3r_matching(dp_output, model: AsymmetricMASt3R, maxdim: int, patch_s
         colmap_db, images, image_to_colmap, im_keypoints, im_matches, min_len_track, skip_geometric_verification)
     colmap_db.commit()
     # Clear GPU Cache for Next
+
+    # Output Raw Depth Maps just in case needed
+    dp_depthmaps_raw = dp_output / "depthmapsd3r_raw"
+    dp_depthmaps_raw.mkdir(parents=True, exist_ok=True)
+    dp_depthmaps_raw_msked = dp_output / "depthmapsd3r_raw_msked"
+    dp_depthmaps_raw_msked.mkdir(parents=True, exist_ok=True)
+    LIST_raw_depth_map, LIST_raw_depth_map_msked = raw_depth_pack
+    for idx, (raw_depth_map, raw_depth_map_msked) in enumerate(zip(LIST_raw_depth_map, LIST_raw_depth_map_msked)):
+        raw_depth_map_ori = interpolate_array(raw_depth_map, size=ori_img_size, mode='nearest')
+        write_array(
+            raw_depth_map_ori, dp_depthmaps_raw / f"{Path(image_paths[idx]).stem}.bin"
+        )
+        raw_depth_map_msked_ori = interpolate_array(raw_depth_map_msked, size=ori_img_size, mode='nearest')
+        write_array(
+            raw_depth_map_msked_ori, dp_depthmaps_raw_msked / f"{Path(image_paths[idx]).stem}.bin"
+        )
+
     torch.cuda.empty_cache()
 
     return colmap_image_pairs
@@ -396,12 +412,14 @@ def get_3D_model_from_scene_d3r_dense(outdir, silent, scene, min_conf_thr=3, as_
     pts3d = to_numpy(scene.get_pts3d())
     scene.min_conf_thr = float(scene.conf_trf(torch.tensor(min_conf_thr)))
     msk = to_numpy(scene.get_masks())
+    depth_maps_raw = to_numpy(scene.get_depthmaps())
+    depth_maps_maked = [dp*m for dp, m in zip(depth_maps_raw, msk)]
     outfile, clean_depth_maps_reproj = _convert_scene_output_to_glb(
         outdir, rgbimg, pts3d, msk, focals, cams2world,
         as_pointcloud=as_pointcloud,
         transparent_cams=transparent_cams, cam_size=cam_size, silent=silent
     )
-    return outfile, clean_depth_maps_reproj
+    return outfile, clean_depth_maps_reproj, (depth_maps_raw, depth_maps_maked)
 
 
 def _convert_scene_output_to_glb(outdir, imgs, pts3d, mask, focals, cams2world, cam_size=0.05,

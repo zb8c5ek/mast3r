@@ -1,0 +1,46 @@
+__author__ = 'Xuanli CHEN'
+"""
+Xuanli Chen
+Research Domain: Computer Vision, Machine Learning
+Email: xuanli(dot)chen(at)icloud.com
+LinkedIn: https://be.linkedin.com/in/xuanlichen
+"""
+import os
+import torch
+# Set PyTorch Hub to /d_disk/torch_hub
+torch.hub.set_dir('/d_disk/torch_hub')
+
+import tempfile
+from contextlib import nullcontext
+
+from mast3r.demo import get_args_parser, main_demo
+
+from mast3r.model import AsymmetricMASt3R
+from mast3r.utils.misc import hash_md5
+
+import mast3r.utils.path_to_dust3r  # noqa
+from dust3rDir.dust3r.demo import set_print_with_timestamp
+
+import matplotlib.pyplot as pl
+pl.ion()
+
+torch.backends.cuda.matmul.allow_tf32 = True  # for gpu >= Ampere and pytorch >= 1.12
+
+if __name__ == '__main__':
+    parser = get_args_parser()
+    args = parser.parse_args()
+    set_print_with_timestamp()
+    from pathlib import Path
+    import datetime
+    weights_path = Path("checkpoints/" + args.model_name + '.pth').resolve()
+    assert weights_path.exists(), f"Model file {weights_path} not found."
+    weights_path = weights_path.as_posix()
+    model = AsymmetricMASt3R.from_pretrained(weights_path).to(args.device)
+    chkpt_tag = hash_md5(weights_path)
+
+    cache_path = os.path.join(tmpdirname, chkpt_tag)
+    os.makedirs(cache_path, exist_ok=True)
+    main_demo(cache_path, model, args.retrieval_model, args.device, args.image_size, server_name, args.server_port,
+              silent=args.silent, share=args.share, gradio_delete_cache=args.gradio_delete_cache)
+    # Print the URL with localhost
+    print(f"[{datetime.datetime.now()}] View Outside the Docker: http://localhost:{args.server_port}")

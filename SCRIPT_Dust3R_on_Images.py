@@ -165,11 +165,12 @@ if __name__ == '__main__':
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
 
     # For each Image, make a blob, that only its neighbors forward 2 and back ward 2 timestamps are selected
-    if len(fps_images) > 20:
-        fps_images = fps_images[:20]    # 32 Images cause Docker shut down.
+    if len(fps_images) > 10:
+        fps_images = fps_images[:10]    # 32 Images cause Docker shut down.
     dp_output.mkdir(parents=True, exist_ok=True)
     get_reconstructed_scene(
         outdir=dp_output,
         model=model,
-        filelist=[fp.resolve().as_posix() for fp in fps_images]
+        filelist=[fp.resolve().as_posix() for fp in fps_images],
+        min_conf_thr=1
     )
