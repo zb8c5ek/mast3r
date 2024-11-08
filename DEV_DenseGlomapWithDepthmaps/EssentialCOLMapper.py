@@ -9,7 +9,7 @@ Email: xuanli(dot)chen(at)icloud.com
 LinkedIn: https://be.linkedin.com/in/xuanlichen
 """
 class COLMapper3r:
-
+    # TODO: add the gin config file
     def __init__(self, dp_blob, dp_output):
         self.colmap_cmd = 'colmap'
         self.dp_blob = dp_blob
@@ -44,7 +44,6 @@ class COLMapper3r:
             f"--image_path {self.dp_blob.as_posix()} "
             f"--SiftExtraction.estimate_affine_shape 1 "
             f"--SiftExtraction.domain_size_pooling 1 "
-            f"--ImageReader.single_camera 1 "
             f"--SiftExtraction.max_num_orientations 8 "
         )
         result_feat = subprocess.run(cmd_feat, shell=True, check=True, capture_output=True, text=True)
@@ -62,12 +61,15 @@ class COLMapper3r:
         print("Exhaustive Matcher Errors:", result_match.stderr)
 
         # 4. Run the COLMAP Mapper
+        # TODO: set the ba numbers as a parameter
         cmd_mapper = (
             f"{self.colmap_cmd} mapper "
             f"--database_path {fp_db.as_posix()} "
             f"--image_path {self.dp_blob.as_posix()} "
             f"--output_path {dp_recon.as_posix()} "
             f"--Mapper.multiple_models 1 "
+            # f"--Mapper.ba_local_max_num_iterations 100 "
+            # f"--Mapper.ba_global_max_num_iterations 100 "
         )
         result_mapper = subprocess.run(cmd_mapper, shell=True, check=True, capture_output=True, text=True)
         print("Mapper Output:", result_mapper.stdout)

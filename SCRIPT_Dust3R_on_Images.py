@@ -30,6 +30,7 @@ def get_reconstructed_scene(outdir, model, filelist, niter=300, min_conf_thr=3,
     from a list of images, run dust3r inference, global aligner.
     then run get_3D_model_from_scene
     """
+    # TODO: make these a config file
     silent = False
     image_size = 512
     device = "cuda"
@@ -38,7 +39,7 @@ def get_reconstructed_scene(outdir, model, filelist, niter=300, min_conf_thr=3,
     cam_size = 0.05
     clean_depth = True
     mask_sky = False
-    as_pointcloud = True
+    as_pointcloud = False
     schedule = 'linear' # 'linear' or 'cosine'
 
     imgs = load_images(filelist, size=image_size, verbose=not silent)
@@ -159,10 +160,11 @@ if __name__ == '__main__':
     weights_path = weights_path.as_posix()
 
     model = AsymmetricMASt3R.from_pretrained(weights_path).to("cuda")
-    dp_images = Path("/d_disk/RunningData/ZhiNengDao/75to94-720P_32/images")
-    dp_output = Path("/d_disk/RunningData/ZhiNengDao/75to94-720P_32/dust3rGA")
+    dp_images = Path("/d_disk/RunningData/Cone2/undistorted_2024-11-05_16-06-32/DEVcache_sfm-frames_ts-590_te-594_int-4_num-144/DUSt3R_blobs-3_recon_20241106_081622_sling/blob_0000-sling-start590.399871_end591.199888/front/images")
+    dp_output = Path("/d_disk/RunningData/Cone2/undistorted_2024-11-05_16-06-32/DEVcache_sfm-frames_ts-590_te-594_int-4_num-144/DUSt3R_blobs-3_recon_20241106_081622_sling/blob_0000-sling-start590.399871_end591.199888/front/Mesh_conf_3")
     fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
+    min_conf_thr = 3
 
     # For each Image, make a blob, that only its neighbors forward 2 and back ward 2 timestamps are selected
     if len(fps_images) > 10:

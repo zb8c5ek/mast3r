@@ -157,7 +157,7 @@ def get_reconstructed_scene(
         device = "cuda"
         # Comment: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
         dense_matching = True   # False
-        conf_thr = 1.001 # 1.001 previously
+        conf_thr = 4.001 # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(dp_output, model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
                                                  dense_matching, 5, conf_thr,
@@ -283,18 +283,23 @@ if __name__ == "__main__":
     # Get the current date and time
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     blob_params = (1, 1)
-    dp_images = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-31_18-42-24/DEVcache_sfm-frames_ts-2460_te-2482_int-4_num-672/images")
-    CHOICE_blob_mode = ['360']   # ['sling', '360'] # ONLY One is Supperted for Now.
+    dp_images = Path(r"/d_disk/RunningData/Cone2/undistorted_2024-11-05_16-06-32/DEVcache_sfm-frames_ts-590_te-594_int-4_num-144/images")
+    CHOICE_blob_mode = ['sling']   # ['sling', '360'] # ONLY One is Supperted for Now.
     if len(CHOICE_blob_mode) > 1:
         raise UNIMPLEMENTED("Only One Mode is Supported for Now.")
     # model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
     model_name = "DUSt3R_ViTLarge_BaseDecoder_512_dpt"
-    dp_output = Path(f"/d_disk/RunningData/ConeAndLock/undistorted_2024-10-31_18-42-24/DEVcache_sfm-frames_ts-2460_te-2482_int-4_num-672/{model_name.split('_')[0]}_blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}_{CHOICE_blob_mode[0]}")
+    dp_output = dp_images.parent / f"{model_name.split('_')[0]}_blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}_{CHOICE_blob_mode[0]}"
     # TODO: make it a config file, and run from there.
+    # TODO: Limit the sequence to have like in total <= 150 images, so that the processing time is about 10 min for Mapping.
+    # TODO: add a config file for im_conf enabble.
+    # TODO: Add Output Mesh Option, in fact, as default.
+    # TODO: shall load the Recon Model first, then using the know poses.
+    # TODO: the start poses shall be available from the InstantSPlat -> Firstly, apply the Mesh Part to Instant Splat. and Move that Dust3r as default version.
     FLAG_ohne_rear = True
     FLAG_all_mappings = True
     FLAG_skip_GLOMAP = False
-    FLAG_silent = True
+    FLAG_silent = False
     # ================================================================
     fps_images_all = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images_all) > 1, "Need at least 2 images to run reconstruction"
@@ -308,7 +313,7 @@ if __name__ == "__main__":
     if FLAG_all_mappings:
         # TODO: mappinf all in the sling use some CPUs in the background, when blobs finish processing, join them.
         # COLMAPPer can first load the models to see performance first.
-        DICT_blob_sparse_mapper = COLMapper3r(dp_images, dp_images.parent / "cache-sparse-all")
+        DICT_blob_sparse_mapper = COLMapper3r(dp_images, dp_images.parent / "cache-sparse-all-multi-cam-default")
 
     for blob_idx, (start_ts, end_ts) in tqdm(enumerate(blobs.keys()), total=len(blobs)):
         start_time = time()
