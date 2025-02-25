@@ -160,8 +160,8 @@ if __name__ == '__main__':
     weights_path = weights_path.as_posix()
 
     model = AsymmetricMASt3R.from_pretrained(weights_path).to("cuda")
-    dp_images = Path("/d_disk/RunningData/Cone2/undistorted_2024-11-05_16-06-32/DEVcache_sfm-frames_ts-590_te-594_int-4_num-144/DUSt3R_blobs-3_recon_20241106_081622_sling/blob_0000-sling-start590.399871_end591.199888/front/images")
-    dp_output = Path("/d_disk/RunningData/Cone2/undistorted_2024-11-05_16-06-32/DEVcache_sfm-frames_ts-590_te-594_int-4_num-144/DUSt3R_blobs-3_recon_20241106_081622_sling/blob_0000-sling-start590.399871_end591.199888/front/Mesh_conf_3")
+    dp_images = Path("/d_disk/DATA/IMG_0111_frames")
+    dp_output = Path("/d_disk/DATA/IMG_0111_frames_output")
     fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
     min_conf_thr = 3

@@ -27,6 +27,7 @@ pl.ion()
 torch.backends.cuda.matmul.allow_tf32 = True  # for gpu >= Ampere and pytorch >= 1.12
 
 if __name__ == '__main__':
+    # Comment: 40 images - 8G, ETA 31 min (perhaps will fall to like 15 to 20 mins)
     parser = get_args_parser()
     args = parser.parse_args()
     set_print_with_timestamp()

@@ -458,21 +458,28 @@ if __name__ == '__main__':
     weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
     assert weights_path.exists(), f"Model file {weights_path} not found."
     weights_path = weights_path.as_posix()
-    niter = 100
-    for min_conf_thr in [3]:
-        model = AsymmetricMASt3R.from_pretrained(weights_path).to("cuda")
-        dp_images = Path("/d_disk/RunningData/ZhiNengDao/blob2/images")
-        dp_output = Path("/d_disk/RunningData/ZhiNengDao/blob2/dust3rGA-ni%04d-conf%02d" % (niter, min_conf_thr))
-        fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
-        assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
+    niter = 300
+    # Set Input Folders
+    dps_images = [
+        "/d_disk/Desktop/material/3rImg-Room-24",
+        "/d_disk/Desktop/material/3rImg-Doorway-24"
+    ]
 
-        # For each Image, make a blob, that only its neighbors forward 2 and back ward 2 timestamps are selected
+    for dn_images in dps_images:
+        for min_conf_thr in [1, 3]:
+            model = AsymmetricMASt3R.from_pretrained(weights_path).to("cuda")
+            dp_images = Path(dn_images)
+            dp_output = dp_images.parent / Path("dust3rGA-ni%04d-conf%02d" % (niter, min_conf_thr))
+            fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
+            assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
 
-        dp_output.mkdir(parents=True, exist_ok=True)
-        scene, outfile, imgs = get_reconstructed_scene(
-            outdir=dp_output,
-            model=model,
-            niter=niter,
-            filelist=[fp.resolve().as_posix() for fp in fps_images],
-            min_conf_thr=min_conf_thr
-        )
+            # For each Image, make a blob, that only its neighbors forward 2 and back ward 2 timestamps are selected
+
+            dp_output.mkdir(parents=True, exist_ok=True)
+            scene, outfile, imgs = get_reconstructed_scene(
+                outdir=dp_output,
+                model=model,
+                niter=niter,
+                filelist=[fp.resolve().as_posix() for fp in fps_images],
+                min_conf_thr=min_conf_thr
+            )

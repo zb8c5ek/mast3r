@@ -122,6 +122,8 @@ def get_reconstructed_scene(
     from a list of images, run mast3r inference, sparse global aligner.
     then run get_3D_model_from_scene
     """
+    # Warning: Original Value shall be 512
+    # image_size = 720
     image_size = 512
     imgs = load_images(filelist, size=image_size, verbose=not silent)
     assert len(imgs) > 1, "Need at least 2 images to run reconstruction"
@@ -157,7 +159,7 @@ def get_reconstructed_scene(
         device = "cuda"
         # Comment: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
         dense_matching = True   # False
-        conf_thr = 4.001 # 1.001 previously
+        conf_thr = 1.001 # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(dp_output, model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
                                                  dense_matching, 5, conf_thr,
@@ -283,13 +285,22 @@ if __name__ == "__main__":
     # Get the current date and time
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     blob_params = (1, 1)
-    dp_images = Path(r"/d_disk/RunningData/Cone2/undistorted_2024-11-05_16-06-32/DEVcache_sfm-frames_ts-590_te-594_int-4_num-144/images")
+    # TODO: Scene Level is solved. Now need to import the poses.
+    # TODO: gin.config
+    #   1) make the main into a function
+    #   2) the function default value can go to a config
+    dp_images = Path(r"/e_disk/ZMData/PercepYZ-0113/undistorted_2025-01-13_14-42-02/DEVcache_sfm-frames_ts-20534_te-20544_int-2_num-1020/images")
     CHOICE_blob_mode = ['sling']   # ['sling', '360'] # ONLY One is Supperted for Now.
     if len(CHOICE_blob_mode) > 1:
         raise UNIMPLEMENTED("Only One Mode is Supported for Now.")
     # model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
     model_name = "DUSt3R_ViTLarge_BaseDecoder_512_dpt"
     dp_output = dp_images.parent / f"{model_name.split('_')[0]}_blobs-{blob_params[0] + blob_params[1] + 1}_recon_{current_time}_{CHOICE_blob_mode[0]}"
+    # TODO: current version is too much dependent on the data format of current setup.
+    #   therefore, i need to separate the engine out, instead, give a set of different loaders.
+    #   on the other hand. in fact, they just need a blob loader.
+    #   Script, open and with docs. then without docs. then, compiled using pyinstaller and with docker.
+
     # TODO: make it a config file, and run from there.
     # TODO: Limit the sequence to have like in total <= 150 images, so that the processing time is about 10 min for Mapping.
     # TODO: add a config file for im_conf enabble.
@@ -297,9 +308,9 @@ if __name__ == "__main__":
     # TODO: shall load the Recon Model first, then using the know poses.
     # TODO: the start poses shall be available from the InstantSPlat -> Firstly, apply the Mesh Part to Instant Splat. and Move that Dust3r as default version.
     FLAG_ohne_rear = True
-    FLAG_all_mappings = True
-    FLAG_skip_GLOMAP = False
-    FLAG_silent = False
+    FLAG_all_mappings = False
+    FLAG_skip_GLOMAP = True
+    FLAG_silent = True
     # ================================================================
     fps_images_all = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images_all) > 1, "Need at least 2 images to run reconstruction"
@@ -311,9 +322,9 @@ if __name__ == "__main__":
     bd_ins = BlobDivider(dp_images)
     blobs = bd_ins.get_blob_division(num_neighbor_ts=blob_params)
     if FLAG_all_mappings:
-        # TODO: mappinf all in the sling use some CPUs in the background, when blobs finish processing, join them.
+        # TODO: mapping all in the sling use some CPUs in the background, when blobs finish processing, join them.
         # COLMAPPer can first load the models to see performance first.
-        DICT_blob_sparse_mapper = COLMapper3r(dp_images, dp_images.parent / "cache-sparse-all-multi-cam-default")
+        DICT_sparse_mapper = COLMapper3r(dp_images, dp_images.parent / "cache-sparse-all-single-cam-pinhole")
 
     for blob_idx, (start_ts, end_ts) in tqdm(enumerate(blobs.keys()), total=len(blobs)):
         start_time = time()
