@@ -459,17 +459,18 @@ if __name__ == '__main__':
     assert weights_path.exists(), f"Model file {weights_path} not found."
     weights_path = weights_path.as_posix()
     niter = 300
-    # Set Input Folders
+    # Set Input Folders -> 25 is the sweet point for 16GMEM.
     dps_images = [
-        "/d_disk/Desktop/material/3rImg-Room-24",
-        "/d_disk/Desktop/material/3rImg-Doorway-24"
+        # "/d_disk/Desktop/material/3rImg-Room-25",   # 25 is the sweet point for now. takes about 5 min to optimize, and a few more for eailier computation
+        # "/d_disk/Desktop/material/3rImg-Doorway-25"     # 26 is about 12 min for extraction, then ...
+        "/d_disk/Desktop/material/selected-doorway-27"
     ]
-
+    # TODO: Use a script to call such big funs. as it is 1) better to separate and 2) GPU cleaning easier.
     for dn_images in dps_images:
-        for min_conf_thr in [1, 3]:
+        for min_conf_thr in [3]:
             model = AsymmetricMASt3R.from_pretrained(weights_path).to("cuda")
             dp_images = Path(dn_images)
-            dp_output = dp_images.parent / Path("dust3rGA-ni%04d-conf%02d" % (niter, min_conf_thr))
+            dp_output = dp_images.parent / Path("%s3rGA-ni%04d-conf%02d" % (dp_images.stem, niter, min_conf_thr))
             fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
             assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
 
