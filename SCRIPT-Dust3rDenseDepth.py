@@ -461,17 +461,23 @@ if __name__ == '__main__':
     niter = 300
     # Set Input Folders -> 25 is the sweet point for 16GMEM.
     dps_images = [
-        # "/d_disk/Desktop/material/3rImg-Room-25",   # 25 is the sweet point for now. takes about 5 min to optimize, and a few more for eailier computation
-        # "/d_disk/Desktop/material/3rImg-Doorway-25"     # 26 is about 12 min for extraction, then ...
-        "/d_disk/Desktop/material/selected-doorway-27"
+        # "/d_disk/Desktop/material/3rImg-Room-25",   # 25 is above sweet (90G Mem) point. takes about 5 min to optimize, and a few more for eailier computation
+        # "/d_disk/Desktop/material/3rImg-Doorway-25"     # 26 is about 12 min for extraction, then 26GB GMEM makes the computer super slow, ETA 3.5h...
+        # "/d_disk/Desktop/DemoTableTars/images-25"
+        # "/d_disk/Desktop/DemoCorridor/images-20"    # 20 images MGM Go to about 58GB, GMEM 17G, that's the sweet point for now.
+        # "/d_disk/Desktop/DemoBiggerTable/bigger-table-3r-20/images-20"
+        # "/d_disk/Desktop/LTube/images_1-num_19",
+        "/d_disk/Desktop/LTube/images_5-num-20",
     ]
+    # dps_images = [f for f in Path("/d_disk/Desktop/DemoBiggerCorridor/images").iterdir() if f.is_dir()]
+
     # TODO: Use a script to call such big funs. as it is 1) better to separate and 2) GPU cleaning easier.
     for dn_images in dps_images:
-        for min_conf_thr in [3]:
+        for min_conf_thr in [1, 3]:
             model = AsymmetricMASt3R.from_pretrained(weights_path).to("cuda")
             dp_images = Path(dn_images)
             dp_output = dp_images.parent / Path("%s3rGA-ni%04d-conf%02d" % (dp_images.stem, niter, min_conf_thr))
-            fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
+            fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.JPG")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
             assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
 
             # For each Image, make a blob, that only its neighbors forward 2 and back ward 2 timestamps are selected
