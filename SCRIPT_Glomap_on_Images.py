@@ -241,9 +241,9 @@ if __name__ == "__main__":
     from pathlib import Path
     from time import time
     start_time = time()
-    dp_images = Path("/d_disk/Desktop/LTube/images_5-num-62")
+    dp_images = Path("/d_disk/Desktop/RoomMetric/images-160")
     dp_output = dp_images.parent / "mapping3r"
-    fps_images = list(dp_images.rglob("*.jpg")) + list(dp_images.rglob("*.png")) + list(dp_images.rglob("*.jpeg")) + list(dp_images.rglob("*.JPG"))
+    fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
     weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
