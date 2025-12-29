@@ -126,7 +126,8 @@ def get_reconstructed_scene(
         outdir,
         model,
         filelist,
-        shared_intrinsics=False
+        shared_intrinsics=True,
+        conf_thr=1.001
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
@@ -166,7 +167,6 @@ def get_reconstructed_scene(
         device = "cuda"
         # TODO: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
         dense_matching = False   # False
-        conf_thr = 1.001  # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
                                                  dense_matching, 5, conf_thr,
@@ -241,8 +241,11 @@ if __name__ == "__main__":
     from pathlib import Path
     from time import time
     start_time = time()
-    dp_images = Path("/d_disk/Desktop/RoomMetric/images-160")
-    dp_output = dp_images.parent / "mapping3r"
+    dp_images = Path("/d_disk/mast3r/assets/Rope/undist_cam1")
+    conf_thr = 2 
+
+    dp_output = dp_images.parent / ("mapping3r_%_undist_cam1_conf_%02d" % conf_thr)
+
     fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
@@ -252,5 +255,6 @@ if __name__ == "__main__":
         outdir=dp_output,
         model=model,
         filelist=[fp.resolve().as_posix() for fp in fps_images],
+        conf_thr=conf_thr,
     )
     print(f"Time taken: {time() - start_time:.2f}s")
