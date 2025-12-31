@@ -241,10 +241,10 @@ if __name__ == "__main__":
     from pathlib import Path
     from time import time
     start_time = time()
-    dp_images = Path("/d_disk/mast3r/assets/Rope/undist_cam1")
-    conf_thr = 2.001
+    dp_images = Path("/d_disk/mast3r/assets/Rope/fuse_cam_2")
+    conf_thr = 2.501
 
-    dp_output = dp_images.parent / f"mapping3r_%_undist_cam1_conf_{conf_thr:02f}".replace('.', '_')
+    dp_output = dp_images.parent / f"mapping3r_{dp_images.stem}_undist_cam1_conf_{conf_thr:02f}".replace('.', '_')
 
     fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
     assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
