@@ -7,6 +7,7 @@
 import torch
 import torch.nn.functional as F
 import os
+import argparse
 
 from mast3r.catmlp_dpt_head import mast3r_head_factory
 
@@ -21,7 +22,8 @@ inf = float('inf')
 def load_model(model_path, device, verbose=True):
     if verbose:
         print('... loading model from', model_path)
-    ckpt = torch.load(model_path, map_location='cpu')
+    with torch.serialization.safe_globals([argparse.Namespace]):
+        ckpt = torch.load(model_path, map_location='cpu')
     args = ckpt['args'].model.replace("ManyAR_PatchEmbed", "PatchEmbedDust3R")
     if 'landscape_only' not in args:
         args = args[:-1] + ', landscape_only=False)'
