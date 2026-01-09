@@ -528,8 +528,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 40  # Number of images per batch
     OVERLAP = 10     # Number of overlapping images between batches
     MAPPER = None  # Options: 'GLOMAP', 'COLMAP', or None to skip mapping
-    START_FRAME = 70  # Frame index to start from (0 = beginning, use to resume processing)
-    SPACING = 2      # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
+    START_FRAME = 80  # Frame index to start from (0 = beginning, use to resume processing)
+    SPACING = 1      # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
     
     # Load model
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
