@@ -1,0 +1,4 @@
+
+*.pyc
+*.pyd
+/models/curope/build

@@ -5,11 +5,34 @@ Research Domain: Computer Vision, Machine Learning
 Email: xuanli(dot)chen(at)icloud.com
 LinkedIn: https://be.linkedin.com/in/xuanlichen
 
-Batched processing script for large image sets.
+Batched DB Generator - Batched processing script for large image sets.
 Processes images in overlapping batches (bubbles) of 60 images each.
 Each batch overlaps by 10 images with the previous batch for continuity.
+
+Output Data Format (COLMAP-style structure):
+============================================
+<output_directory>/
+├── batch_001_f0000_to_f0049_sp1_bs50/
+│   ├── images/              # Copied source images for this batch
+│   │   ├── image_0000.jpg
+│   │   ├── image_0001.jpg
+│   │   └── ...
+│   ├── sparse/              # COLMAP sparse reconstruction
+│   │   └── 0/               # Reconstruction model (cameras.bin, images.bin, points3D.bin)
+│   ├── database.db          # COLMAP database with keypoints and matches
+│   ├── pairs.txt            # Image pairs used for matching
+│   ├── batch_info.json      # Batch parameters and file locations
+│   ├── *_scene.glb          # 3D scene model (GLB format)
+│   └── *_scene.ply          # 3D point cloud (PLY format)
+├── batch_002_f0040_to_f0089_sp1_bs50/
+│   └── ... (same structure)
+└── ...
+
+Folder naming: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}
+This structure is compatible with COLMAP and can be used for further mapping/reconstruction.
 """
 import copy
+import json
 import os
 import shutil
 import tempfile
@@ -128,12 +151,49 @@ def get_3D_model_from_scene(silent, scene_state, transparent_cams=False, cam_siz
     return outfile
 
 
+def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path):
+    """
+    Copy database and images to COLMAP-style folder structure.
+    
+    Output structure:
+        colmap_output_dir/
+        ├── images/
+        │   ├── image1.jpg
+        │   └── ...
+        ├── sparse/          (empty, ready for reconstruction)
+        └── database.db
+    """
+    os.makedirs(colmap_output_dir, exist_ok=True)
+    
+    # Create images directory and copy images
+    images_dir = os.path.join(colmap_output_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
+    for src_path in filelist:
+        dst_path = os.path.join(images_dir, os.path.basename(src_path))
+        if not os.path.exists(dst_path):
+            shutil.copy2(src_path, dst_path)
+    
+    # Create sparse directory (empty, for later reconstruction)
+    sparse_dir = os.path.join(colmap_output_dir, 'sparse')
+    os.makedirs(sparse_dir, exist_ok=True)
+    
+    # Copy database
+    dst_db_path = os.path.join(colmap_output_dir, 'database.db')
+    shutil.copy2(colmap_db_path, dst_db_path)
+    
+    print(f"  Copied COLMAP structure to: {colmap_output_dir}")
+    print(f"    - images/: {len(filelist)} images")
+    print(f"    - database.db: copied")
+    print(f"    - sparse/: created (empty)")
+
+
 def get_reconstructed_scene(
         outdir,
         model,
         filelist,
-        shared_intrinsics=False,
-        mapper='GLOMAP'
+        shared_intrinsics=True,
+        mapper='GLOMAP',
+        colmap_output_dir=None
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
@@ -145,10 +205,11 @@ def get_reconstructed_scene(
         filelist: List of image file paths
         shared_intrinsics: Whether to use shared intrinsics
         mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
+        colmap_output_dir: Path to copy COLMAP-style output (images/, sparse/, database.db)
     """
     silent = False
     image_size = 512
-    imgs = load_images(filelist, size=image_size, verbose=not silent)
+    imgs = load_images(filelist, size=image_size, square_ok=True, verbose=not silent)
     assert len(imgs) > 1, "Need at least 2 images to run reconstruction"
 
     scene_graph_params = ["complete"] # k
@@ -157,6 +218,7 @@ def get_reconstructed_scene(
     pairs = make_pairs(imgs, scene_graph=scene_graph, prefilter=None, symmetrize=True, sim_mat=None)
     cache_dir = os.path.join(outdir, 'cache')
 
+    # Use original image path (like SCRIPT_Glomap_on_Images.py)
     root_path = os.path.commonpath(filelist)
     filelist_relpath = [
         os.path.relpath(filename, root_path).replace('\\', '/')
@@ -203,6 +265,7 @@ def get_reconstructed_scene(
     f.close()
     pycolmap.verify_matches(colmap_db_path, cache_dir + '/pairs.txt')
 
+    # Use sparse_dir if provided, otherwise create 'reconstruction' in cache_dir
     reconstruction_path = os.path.join(cache_dir, "reconstruction")
     if os.path.isdir(reconstruction_path):
         shutil.rmtree(reconstruction_path)
@@ -221,6 +284,9 @@ def get_reconstructed_scene(
         )
     else:
         print(f"Skipping mapping (mapper='{mapper}')")
+        # Copy files to COLMAP structure if colmap_output_dir is provided
+        if colmap_output_dir:
+            _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path)
         return None, None
 
     outfile_name = tempfile.mktemp(suffix='_scene.glb', dir=outdir)
@@ -271,7 +337,9 @@ def process_images_in_batches(
         model,
         batch_size=60,
         overlap=10,
-        mapper='GLOMAP'
+        mapper='GLOMAP',
+        start_frame=0,
+        spacing=1
 ):
     """
     Process images in overlapping batches.
@@ -283,6 +351,9 @@ def process_images_in_batches(
         batch_size: Number of images per batch (default: 60)
         overlap: Number of overlapping images between batches (default: 10)
         mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
+        start_frame: Frame index to start from (default: 0). Use this to resume processing.
+        spacing: Frame spacing/stride (default: 1). E.g., spacing=2 selects every 2nd frame.
+                 Batch still contains batch_size images but spans batch_size*spacing frames.
     """
     # Get all image files
     fps_images = (list(dp_images.glob("*.jpg")) + 
@@ -297,33 +368,46 @@ def process_images_in_batches(
     print(f"Total images found: {total_images}")
     print(f"Batch size: {batch_size}")
     print(f"Overlap: {overlap}")
+    print(f"Spacing: {spacing} (each batch spans {batch_size * spacing} frames)")
+    print(f"Start frame: {start_frame}")
     print(f"Mapper: {mapper if mapper else 'None (skip mapping)'}")
     print(f"{'='*80}\n")
     
     assert total_images > 1, "Need at least 2 images to run reconstruction"
+    assert start_frame < total_images, f"Start frame {start_frame} >= total images {total_images}"
+    assert spacing >= 1, f"Spacing must be >= 1, got {spacing}"
     
-    # Calculate batches
-    step_size = batch_size - overlap
+    # Calculate batches (step in frame indices, accounting for spacing)
+    # Each batch spans batch_size * spacing frames
+    # Overlap of N images means overlap of N * spacing frame indices
+    step_size = (batch_size - overlap) * spacing
     batch_results = []
     
-    batch_num = 0
-    start_idx = 0
+    # Calculate batch number based on start_frame
+    batch_num = start_frame // step_size if start_frame > 0 else 0
+    start_idx = start_frame
     
     while start_idx < total_images:
         batch_num += 1
-        end_idx = min(start_idx + batch_size, total_images)
+        # End index in frame space (not accounting for spacing yet)
+        end_idx_raw = start_idx + batch_size * spacing
         
-        # Get images for this batch
-        batch_images = fps_images[start_idx:end_idx]
+        # Get images for this batch with spacing
+        batch_indices = list(range(start_idx, min(end_idx_raw, total_images), spacing))
+        batch_images = [fps_images[i] for i in batch_indices]
         num_images_in_batch = len(batch_images)
+        
+        # Actual end frame index (last frame in batch)
+        end_idx = batch_indices[-1] if batch_indices else start_idx
         
         print(f"\n{'='*80}")
         print(f"Processing Batch {batch_num}")
-        print(f"Images: {start_idx} to {end_idx-1} ({num_images_in_batch} images)")
+        print(f"Frame range: {start_idx} to {end_idx} (spacing={spacing}, {num_images_in_batch} images)")
         print(f"{'='*80}\n")
         
-        # Create batch-specific output directory
-        batch_output = dp_output / f"batch_{batch_num:03d}_images_{start_idx:04d}_to_{end_idx-1:04d}"
+        # Create batch-specific output directory with full parameters in name
+        # Format: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}
+        batch_output = dp_output / f"batch_{batch_num:03d}_f{start_idx:04d}_to_f{end_idx:04d}_sp{spacing}_bs{batch_size}"
         batch_output.mkdir(parents=True, exist_ok=True)
         
         # Process this batch
@@ -334,13 +418,39 @@ def process_images_in_batches(
                 model=model,
                 filelist=[fp.resolve().as_posix() for fp in batch_images],
                 mapper=mapper,
+                colmap_output_dir=str(batch_output),
             )
             batch_time = time() - batch_start_time
+            
+            # Write batch_info.json summary file
+            batch_info = {
+                'batch_num': batch_num,
+                'start_frame': start_idx,
+                'end_frame': end_idx,
+                'spacing': spacing,
+                'batch_size': batch_size,
+                'overlap': overlap,
+                'num_images': num_images_in_batch,
+                'processing_time_seconds': batch_time,
+                'paths': {
+                    'images': 'images/',
+                    'sparse': 'sparse/',
+                    'database': 'database.db',
+                    'colmap_db': 'cache/colmap.db',
+                },
+                'source_images': [fp.name for fp in batch_images],
+                'success': True
+            }
+            batch_info_path = batch_output / 'batch_info.json'
+            with open(batch_info_path, 'w') as f:
+                json.dump(batch_info, f, indent=2)
             
             batch_results.append({
                 'batch_num': batch_num,
                 'start_idx': start_idx,
-                'end_idx': end_idx - 1,
+                'end_idx': end_idx,
+                'spacing': spacing,
+                'batch_size': batch_size,
                 'num_images': num_images_in_batch,
                 'output_dir': batch_output,
                 'outfile': outfile,
@@ -350,13 +460,16 @@ def process_images_in_batches(
             
             print(f"\n✓ Batch {batch_num} completed in {batch_time:.2f}s")
             print(f"  Output saved to: {batch_output}")
+            print(f"  Batch info: {batch_info_path}")
             
         except Exception as e:
             print(f"\n✗ Batch {batch_num} FAILED: {str(e)}")
             batch_results.append({
                 'batch_num': batch_num,
                 'start_idx': start_idx,
-                'end_idx': end_idx - 1,
+                'end_idx': end_idx,
+                'spacing': spacing,
+                'batch_size': batch_size,
                 'num_images': num_images_in_batch,
                 'output_dir': batch_output,
                 'outfile': None,
@@ -408,13 +521,15 @@ if __name__ == "__main__":
     start_time = time()
     
     # Configuration
-    dp_images = Path("/d_disk/_DataTemp/Apart/fuse-rig/p+15_y+15_r+0")
+    dp_images = Path("/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam0/p-20_y+15_r+0")
     dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
     
     # Batch parameters
-    BATCH_SIZE = 60  # Number of images per batch
+    BATCH_SIZE = 40  # Number of images per batch
     OVERLAP = 10     # Number of overlapping images between batches
     MAPPER = None  # Options: 'GLOMAP', 'COLMAP', or None to skip mapping
+    START_FRAME = 70  # Frame index to start from (0 = beginning, use to resume processing)
+    SPACING = 2      # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
     
     # Load model
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
@@ -430,7 +545,9 @@ if __name__ == "__main__":
         model=model,
         batch_size=BATCH_SIZE,
         overlap=OVERLAP,
-        mapper=MAPPER
+        mapper=MAPPER,
+        start_frame=START_FRAME,
+        spacing=SPACING
     )
     
     # Print summary
