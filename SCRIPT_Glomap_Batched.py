@@ -4,11 +4,17 @@ Xuanli Chen
 Research Domain: Computer Vision, Machine Learning
 Email: xuanli(dot)chen(at)icloud.com
 LinkedIn: https://be.linkedin.com/in/xuanlichen
+
+Batched processing script for large image sets.
+Processes images in overlapping batches (bubbles) of 60 images each.
+Each batch overlaps by 10 images with the previous batch for continuity.
 """
 import copy
 import os
 import shutil
 import tempfile
+from pathlib import Path
+from time import time
 
 import PIL.Image
 import numpy as np
@@ -126,12 +132,19 @@ def get_reconstructed_scene(
         outdir,
         model,
         filelist,
-        shared_intrinsics=True,
-        conf_thr=1.001
+        shared_intrinsics=False,
+        mapper='GLOMAP'
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
     then run get_3D_model_from_scene
+    
+    Args:
+        outdir: Output directory
+        model: MASt3R model
+        filelist: List of image file paths
+        shared_intrinsics: Whether to use shared intrinsics
+        mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
     """
     silent = False
     image_size = 512
@@ -167,6 +180,7 @@ def get_reconstructed_scene(
         device = "cuda"
         # TODO: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
         dense_matching = False   # False
+        conf_thr = 1.001  # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
                                                  dense_matching, 5, conf_thr,
@@ -193,7 +207,21 @@ def get_reconstructed_scene(
     if os.path.isdir(reconstruction_path):
         shutil.rmtree(reconstruction_path)
     os.makedirs(reconstruction_path, exist_ok=True)
-    glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
+    
+    if mapper == 'GLOMAP':
+        print("Using GLOMAP mapper...")
+        glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
+    elif mapper == 'COLMAP':
+        print("Using COLMAP incremental mapper...")
+        # Use pycolmap incremental mapping
+        pycolmap.incremental_mapping(
+            database_path=colmap_db_path,
+            image_path=root_path,
+            output_path=reconstruction_path
+        )
+    else:
+        print(f"Skipping mapping (mapper='{mapper}')")
+        return None, None
 
     outfile_name = tempfile.mktemp(suffix='_scene.glb', dir=outdir)
 
@@ -237,25 +265,174 @@ def get_reconstructed_scene(
     return scene_state, outfile
 
 
+def process_images_in_batches(
+        dp_images,
+        dp_output,
+        model,
+        batch_size=60,
+        overlap=10,
+        mapper='GLOMAP'
+):
+    """
+    Process images in overlapping batches.
+    
+    Args:
+        dp_images: Path to the directory containing images
+        dp_output: Path to the output directory
+        model: The MASt3R model
+        batch_size: Number of images per batch (default: 60)
+        overlap: Number of overlapping images between batches (default: 10)
+        mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
+    """
+    # Get all image files
+    fps_images = (list(dp_images.glob("*.jpg")) + 
+                  list(dp_images.glob("*.png")) + 
+                  list(dp_images.glob("*.jpeg")))
+    
+    # Sort images by name for consistent ordering
+    fps_images = sorted(fps_images)
+    
+    total_images = len(fps_images)
+    print(f"\n{'='*80}")
+    print(f"Total images found: {total_images}")
+    print(f"Batch size: {batch_size}")
+    print(f"Overlap: {overlap}")
+    print(f"Mapper: {mapper if mapper else 'None (skip mapping)'}")
+    print(f"{'='*80}\n")
+    
+    assert total_images > 1, "Need at least 2 images to run reconstruction"
+    
+    # Calculate batches
+    step_size = batch_size - overlap
+    batch_results = []
+    
+    batch_num = 0
+    start_idx = 0
+    
+    while start_idx < total_images:
+        batch_num += 1
+        end_idx = min(start_idx + batch_size, total_images)
+        
+        # Get images for this batch
+        batch_images = fps_images[start_idx:end_idx]
+        num_images_in_batch = len(batch_images)
+        
+        print(f"\n{'='*80}")
+        print(f"Processing Batch {batch_num}")
+        print(f"Images: {start_idx} to {end_idx-1} ({num_images_in_batch} images)")
+        print(f"{'='*80}\n")
+        
+        # Create batch-specific output directory
+        batch_output = dp_output / f"batch_{batch_num:03d}_images_{start_idx:04d}_to_{end_idx-1:04d}"
+        batch_output.mkdir(parents=True, exist_ok=True)
+        
+        # Process this batch
+        try:
+            batch_start_time = time()
+            scene_state, outfile = get_reconstructed_scene(
+                outdir=batch_output,
+                model=model,
+                filelist=[fp.resolve().as_posix() for fp in batch_images],
+                mapper=mapper,
+            )
+            batch_time = time() - batch_start_time
+            
+            batch_results.append({
+                'batch_num': batch_num,
+                'start_idx': start_idx,
+                'end_idx': end_idx - 1,
+                'num_images': num_images_in_batch,
+                'output_dir': batch_output,
+                'outfile': outfile,
+                'time': batch_time,
+                'success': True
+            })
+            
+            print(f"\n✓ Batch {batch_num} completed in {batch_time:.2f}s")
+            print(f"  Output saved to: {batch_output}")
+            
+        except Exception as e:
+            print(f"\n✗ Batch {batch_num} FAILED: {str(e)}")
+            batch_results.append({
+                'batch_num': batch_num,
+                'start_idx': start_idx,
+                'end_idx': end_idx - 1,
+                'num_images': num_images_in_batch,
+                'output_dir': batch_output,
+                'outfile': None,
+                'time': 0,
+                'success': False,
+                'error': str(e)
+            })
+        
+        # Move to next batch
+        if end_idx >= total_images:
+            break
+        start_idx += step_size
+    
+    return batch_results
+
+
+def print_summary(batch_results, total_time):
+    """Print a summary of all batch processing results."""
+    print(f"\n\n{'='*80}")
+    print("PROCESSING SUMMARY")
+    print(f"{'='*80}\n")
+    
+    successful_batches = [b for b in batch_results if b['success']]
+    failed_batches = [b for b in batch_results if not b['success']]
+    
+    print(f"Total batches: {len(batch_results)}")
+    print(f"Successful: {len(successful_batches)}")
+    print(f"Failed: {len(failed_batches)}")
+    print(f"Total time: {total_time:.2f}s ({total_time/60:.2f} minutes)\n")
+    
+    if successful_batches:
+        print("Successful batches:")
+        for b in successful_batches:
+            print(f"  Batch {b['batch_num']}: images {b['start_idx']}-{b['end_idx']} "
+                  f"({b['num_images']} images) - {b['time']:.2f}s")
+            print(f"    Output: {b['output_dir']}")
+    
+    if failed_batches:
+        print("\nFailed batches:")
+        for b in failed_batches:
+            print(f"  Batch {b['batch_num']}: images {b['start_idx']}-{b['end_idx']} "
+                  f"({b['num_images']} images)")
+            print(f"    Error: {b.get('error', 'Unknown error')}")
+    
+    print(f"\n{'='*80}\n")
+
+
 if __name__ == "__main__":
-    from pathlib import Path
-    from time import time
     start_time = time()
-
-    dp_images = Path("/d_disk/_DataBuffer/WristHeadOsmo/0108/glue-mix-42")
-    conf_thr = 4.501
-
-    dp_output = dp_images.parent / f"mapping3r_{dp_images.stem}_undist_cam1_conf_{conf_thr:02f}".replace('.', '_')
-
-    fps_images = list(dp_images.glob("*.jpg")) + list(dp_images.glob("*.png")) + list(dp_images.glob("*.jpeg"))
-    assert len(fps_images) > 1, "Need at least 2 images to run reconstruction"
+    
+    # Configuration
+    dp_images = Path("/d_disk/_DataTemp/Apart/fuse-rig/p+15_y+15_r+0")
+    dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
+    
+    # Batch parameters
+    BATCH_SIZE = 60  # Number of images per batch
+    OVERLAP = 10     # Number of overlapping images between batches
+    MAPPER = None  # Options: 'GLOMAP', 'COLMAP', or None to skip mapping
+    
+    # Load model
     model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
     weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
+    print(f"Loading model from {weights_path}...")
     model = AsymmetricMASt3R.from_pretrained(weights_path).to('cuda')
-    get_reconstructed_scene(
-        outdir=dp_output,
+    print("Model loaded successfully!\n")
+    
+    # Process images in batches
+    batch_results = process_images_in_batches(
+        dp_images=dp_images,
+        dp_output=dp_output,
         model=model,
-        filelist=[fp.resolve().as_posix() for fp in fps_images],
-        conf_thr=conf_thr,
+        batch_size=BATCH_SIZE,
+        overlap=OVERLAP,
+        mapper=MAPPER
     )
-    print(f"Time taken: {time() - start_time:.2f}s")
+    
+    # Print summary
+    total_time = time() - start_time
+    print_summary(batch_results, total_time)
