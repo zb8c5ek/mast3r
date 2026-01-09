@@ -241,8 +241,8 @@ if __name__ == "__main__":
     from pathlib import Path
     from time import time
     start_time = time()
-    dp_images = Path("/d_disk/mast3r/assets/Rope/fuse_cam_2")
-    conf_thr = 2.501
+    dp_images = Path("/d_disk/_DataBuffer/WristHeadOsmo/0108/glue-mix-42")
+    conf_thr = 4.501
 
     dp_output = dp_images.parent / f"mapping3r_{dp_images.stem}_undist_cam1_conf_{conf_thr:02f}".replace('.', '_')
 
