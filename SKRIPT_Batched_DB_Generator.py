@@ -36,9 +36,13 @@ import json
 import os
 import shutil
 import tempfile
+import subprocess
+import multiprocessing
 from pathlib import Path
 from time import time
+import argparse
 
+import yaml
 import PIL.Image
 import numpy as np
 import pycolmap
@@ -51,8 +55,9 @@ from scipy.spatial.transform import Rotation
 import mast3r.utils.path_to_dust3r  # noqa
 from dust3rDir.dust3r.utils.image import load_images
 from dust3rDir.dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL
-from mast3r.colmap.mapping import kapture_import_image_folder_or_list, run_mast3r_matching, glomap_run_mapper
+from mast3r.colmap.mapping import kapture_import_image_folder_or_list, glomap_run_mapper
 from mast3r.image_pairs import make_pairs
+from MOD_FeatureProcess import run_mast3r_matching
 from mast3r.retrieval.processor import Retriever
 
 
@@ -151,6 +156,82 @@ def get_3D_model_from_scene(silent, scene_state, transparent_cams=False, cam_siz
     return outfile
 
 
+def _run_pycolmap_mapper_subprocess(database_path: str, image_path: str, output_path: str):
+    """
+    Run pycolmap incremental mapping in a subprocess.
+    This isolates the mapping and prevents crashes from affecting the main process.
+    """
+    try:
+        import pycolmap
+        pycolmap.incremental_mapping(
+            database_path=database_path,
+            image_path=image_path,
+            output_path=output_path
+        )
+        return True
+    except Exception as e:
+        print(f"Mapping failed: {e}")
+        return False
+
+
+def run_mapper_async(
+    database_path: str,
+    image_path: str,
+    output_path: str,
+    mapper_type: str = 'COLMAP',
+    wait: bool = False,
+    timeout: int = None
+):
+    """
+    Run mapper in a separate process (async by default).
+    
+    Args:
+        database_path: Path to COLMAP database
+        image_path: Path to images directory
+        output_path: Output directory for reconstruction
+        mapper_type: 'COLMAP' or 'GLOMAP'
+        wait: If True, wait for completion. If False, return immediately.
+        timeout: Timeout in seconds (only if wait=True)
+        
+    Returns:
+        Process object if wait=False, success boolean if wait=True
+    """
+    os.makedirs(output_path, exist_ok=True)
+    
+    if mapper_type == 'COLMAP':
+        # Use multiprocessing to run pycolmap in isolation
+        proc = multiprocessing.Process(
+            target=_run_pycolmap_mapper_subprocess,
+            args=(database_path, image_path, output_path)
+        )
+        proc.start()
+        
+        if wait:
+            proc.join(timeout=timeout)
+            return proc.exitcode == 0
+        return proc
+        
+    elif mapper_type == 'GLOMAP':
+        # Run glomap as subprocess
+        cmd = [
+            'glomap', 'mapper',
+            '--database_path', str(database_path),
+            '--image_path', str(image_path),
+            '--output_path', str(output_path),
+        ]
+        
+        if wait:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if result.returncode != 0:
+                print(f"GLOMAP failed: {result.stderr}")
+            return result.returncode == 0
+        else:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return proc
+    else:
+        raise ValueError(f"Unknown mapper type: {mapper_type}")
+
+
 def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path):
     """
     Copy database and images to COLMAP-style folder structure.
@@ -192,8 +273,9 @@ def get_reconstructed_scene(
         model,
         filelist,
         shared_intrinsics=True,
-        mapper='GLOMAP',
-        colmap_output_dir=None
+        mapper='COLMAP',
+        colmap_output_dir=None,
+        matching_strategy=('conf_thres', 1.001)
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
@@ -206,6 +288,10 @@ def get_reconstructed_scene(
         shared_intrinsics: Whether to use shared intrinsics
         mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
         colmap_output_dir: Path to copy COLMAP-style output (images/, sparse/, database.db)
+        matching_strategy: Tuple specifying the filtering strategy:
+            - ('conf_thres', float): Fixed confidence threshold (default: 1.001)
+            - ('ratio', float): Keep top X% of matches (e.g., 0.1 for top 10%)
+            - ('num_pts', int): Keep top N matches by confidence
     """
     silent = False
     image_size = 512
@@ -242,10 +328,9 @@ def get_reconstructed_scene(
         device = "cuda"
         # TODO: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
         dense_matching = False   # False
-        conf_thr = 1.001  # 1.001 previously
         colmap_image_pairs = run_mast3r_matching(model, image_size, 16, device,
                                                  kdata, root_path, image_pairs, colmap_db,
-                                                 dense_matching, 5, conf_thr,
+                                                 dense_matching, 5, matching_strategy,
                                                  False, 3)
         colmap_db.close()
     except Exception as e:
@@ -275,13 +360,43 @@ def get_reconstructed_scene(
         print("Using GLOMAP mapper...")
         glomap_run_mapper('glomap', colmap_db_path, reconstruction_path, root_path)
     elif mapper == 'COLMAP':
-        print("Using COLMAP incremental mapper...")
+        print("Using COLMAP incremental mapper (sync)...")
         # Use pycolmap incremental mapping
         pycolmap.incremental_mapping(
             database_path=colmap_db_path,
             image_path=root_path,
             output_path=reconstruction_path
         )
+    elif mapper == 'COLMAP_ASYNC':
+        print("Launching COLMAP incremental mapper (async subprocess)...")
+        # Copy files to COLMAP structure first
+        if colmap_output_dir:
+            _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path)
+        # Start async mapping
+        proc = run_mapper_async(
+            database_path=colmap_db_path,
+            image_path=root_path,
+            output_path=reconstruction_path,
+            mapper_type='COLMAP',
+            wait=False
+        )
+        print(f"  Mapper process started (PID: {proc.pid})")
+        return None, None  # Return immediately, mapping runs in background
+    elif mapper == 'GLOMAP_ASYNC':
+        print("Launching GLOMAP mapper (async subprocess)...")
+        # Copy files to COLMAP structure first
+        if colmap_output_dir:
+            _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path)
+        # Start async mapping
+        proc = run_mapper_async(
+            database_path=colmap_db_path,
+            image_path=root_path,
+            output_path=reconstruction_path,
+            mapper_type='GLOMAP',
+            wait=False
+        )
+        print(f"  Mapper process started (PID: {proc.pid})")
+        return None, None  # Return immediately, mapping runs in background
     else:
         print(f"Skipping mapping (mapper='{mapper}')")
         # Copy files to COLMAP structure if colmap_output_dir is provided
@@ -339,7 +454,8 @@ def process_images_in_batches(
         overlap=10,
         mapper='GLOMAP',
         start_frame=0,
-        spacing=1
+        spacing=1,
+        matching_strategy=('conf_thres', 1.001)
 ):
     """
     Process images in overlapping batches.
@@ -354,6 +470,10 @@ def process_images_in_batches(
         start_frame: Frame index to start from (default: 0). Use this to resume processing.
         spacing: Frame spacing/stride (default: 1). E.g., spacing=2 selects every 2nd frame.
                  Batch still contains batch_size images but spans batch_size*spacing frames.
+        matching_strategy: Tuple specifying the filtering strategy:
+            - ('conf_thres', float): Fixed confidence threshold (default: 1.001)
+            - ('ratio', float): Keep top X% of matches (e.g., 0.1 for top 10%)
+            - ('num_pts', int): Keep top N matches by confidence
     """
     # Get all image files
     fps_images = (list(dp_images.glob("*.jpg")) + 
@@ -406,8 +526,10 @@ def process_images_in_batches(
         print(f"{'='*80}\n")
         
         # Create batch-specific output directory with full parameters in name
-        # Format: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}
-        batch_output = dp_output / f"batch_{batch_num:03d}_f{start_idx:04d}_to_f{end_idx:04d}_sp{spacing}_bs{batch_size}"
+        # Format: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}_{strategy}
+        strategy_type, strategy_value = matching_strategy
+        strategy_str = f"{strategy_type}_{strategy_value}".replace('.', '_')
+        batch_output = dp_output / f"batch_{batch_num:03d}_f{start_idx:04d}_to_f{end_idx:04d}_sp{spacing}_bs{batch_size}_{strategy_str}"
         batch_output.mkdir(parents=True, exist_ok=True)
         
         # Process this batch
@@ -419,6 +541,7 @@ def process_images_in_batches(
                 filelist=[fp.resolve().as_posix() for fp in batch_images],
                 mapper=mapper,
                 colmap_output_dir=str(batch_output),
+                matching_strategy=matching_strategy,
             )
             batch_time = time() - batch_start_time
             
@@ -517,23 +640,60 @@ def print_summary(batch_results, total_time):
     print(f"\n{'='*80}\n")
 
 
-if __name__ == "__main__":
+def load_config(config_path: str) -> dict:
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def run_from_config(config_path: str):
+    """Run batch processing from a YAML config file."""
     start_time = time()
     
-    # Configuration
-    dp_images = Path("/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam0/p+0_y+15_r+0")
-    dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
+    # Load config
+    config = load_config(config_path)
+    print(f"Loaded config from: {config_path}")
     
-    # Batch parameters
-    BATCH_SIZE = 40  # Number of images per batch
-    OVERLAP = 10     # Number of overlapping images between batches
-    MAPPER = None  # Options: 'GLOMAP', 'COLMAP', or None to skip mapping
-    START_FRAME = 0  # Frame index to start from (0 = beginning, use to resume processing)
-    SPACING = 1      # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
+    # Parse paths
+    dp_images = Path(config['paths']['images'])
+    if 'output' in config['paths'] and config['paths']['output']:
+        dp_output = Path(config['paths']['output'])
+    else:
+        dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
+    
+    # Parse batch parameters
+    batch_cfg = config.get('batch', {})
+    BATCH_SIZE = batch_cfg.get('size', 30)
+    OVERLAP = batch_cfg.get('overlap', 15)
+    START_FRAME = batch_cfg.get('start_frame', 0)
+    SPACING = batch_cfg.get('spacing', 1)
+    
+    # Parse mapper
+    MAPPER = config.get('mapper', None)
+    
+    # Parse matching strategy
+    match_cfg = config.get('matching', {})
+    
+    # Check if combined strategies are specified
+    if 'combined' in match_cfg:
+        # Combined strategies: [('conf_thres', 2.5), ('num_pts', 1500)]
+        combined = match_cfg['combined']
+        MATCHING_STRATEGY = [(item['type'], item['value']) for item in combined]
+    else:
+        # Single strategy
+        strategy_type = match_cfg.get('type', 'num_pts')
+        strategy_value = match_cfg.get('value', 1000)
+        MATCHING_STRATEGY = (strategy_type, strategy_value)
+    
+    # Parse model config
+    model_cfg = config.get('model', {})
+    model_name = model_cfg.get('name', 'MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric')
+    checkpoint_dir = model_cfg.get('checkpoint_dir', 'checkpoints')
     
     # Load model
-    model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
-    weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
+    weights_path = Path(checkpoint_dir) / (model_name + '.pth')
+    weights_path = weights_path.resolve()
     print(f"Loading model from {weights_path}...")
     model = AsymmetricMASt3R.from_pretrained(weights_path).to('cuda')
     print("Model loaded successfully!\n")
@@ -547,9 +707,66 @@ if __name__ == "__main__":
         overlap=OVERLAP,
         mapper=MAPPER,
         start_frame=START_FRAME,
-        spacing=SPACING
+        spacing=SPACING,
+        matching_strategy=MATCHING_STRATEGY
     )
     
     # Print summary
     total_time = time() - start_time
     print_summary(batch_results, total_time)
+    
+    return batch_results
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Batched DB Generator for MASt3R')
+    parser.add_argument('--config', '-c', type=str, default=None,
+                        help='Path to YAML config file (e.g., configs/sample.yml)')
+    args = parser.parse_args()
+    
+    if args.config:
+        # Run from config file
+        run_from_config(args.config)
+    else:
+        # Legacy mode: use hardcoded values
+        start_time = time()
+    
+        # Configuration
+        dp_images = Path("/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam1/p-15_y-10_r+0")
+        dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
+        
+        # Batch parameters
+        BATCH_SIZE = 30  # Number of images per batch
+        OVERLAP = 15     # Number of overlapping images between batches (stride = 30-15 = 15)
+        MAPPER = None  # Options: 'GLOMAP', 'COLMAP', or None to skip mapping
+        START_FRAME = 0  # Frame index to start from (0 = beginning, use to resume processing)
+        SPACING = 1      # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
+        # Matching strategy options:
+        #   ('conf_thres', 1.001) - Fixed confidence threshold
+        #   ('ratio', 0.1) - Keep top 10% of matches
+        #   ('num_pts', 1000) - Keep top 1000 matches
+        MATCHING_STRATEGY = ('num_pts', 1000)
+        
+        # Load model
+        model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+        weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
+        print(f"Loading model from {weights_path}...")
+        model = AsymmetricMASt3R.from_pretrained(weights_path).to('cuda')
+        print("Model loaded successfully!\n")
+        
+        # Process images in batches
+        batch_results = process_images_in_batches(
+            dp_images=dp_images,
+            dp_output=dp_output,
+            model=model,
+            batch_size=BATCH_SIZE,
+            overlap=OVERLAP,
+            mapper=MAPPER,
+            start_frame=START_FRAME,
+            spacing=SPACING,
+            matching_strategy=MATCHING_STRATEGY
+        )
+        
+        # Print summary
+        total_time = time() - start_time
+        print_summary(batch_results, total_time)

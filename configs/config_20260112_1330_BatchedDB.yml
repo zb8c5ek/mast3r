@@ -1,0 +1,33 @@
+# Configuration for BURNSCRIPT_20260112_1330_BatchedDB
+# =====================================================
+# Dataset: RopeCap cam1 p-15_y-10_r+0
+# Mode: Full batched processing
+
+# Input/Output paths
+paths:
+  images: "/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam1/p-15_y-10_r+0"
+  output: "/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam1/mapping3r_batched_20260112_1330_final"
+
+# Batch processing parameters
+batch:
+  size: 30           # Number of images per batch
+  overlap: 15        # Number of overlapping images between batches (stride = size - overlap = 15)
+  start_frame: 0     # Frame index to start from (0 = beginning, use to resume processing)
+  spacing: 1         # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
+
+# Mapper options: 'GLOMAP', 'COLMAP', or null to skip mapping
+mapper: null
+
+# Combined matching strategy (intersection/AND):
+# Keep matches where BOTH conditions are satisfied:
+#   - confidence >= 2.5 (filter out poor matches)
+#   - in top 1500 matches (limit total points)
+matching:
+  combined:
+    - {type: 'conf_thres', value: 2.5}
+    - {type: 'num_pts', value: 1500}
+
+# Model configuration
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"

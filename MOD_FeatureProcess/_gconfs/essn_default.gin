@@ -1,0 +1,23 @@
+# ESSN Feature Processing - Default Configuration
+# ================================================
+# This gin config sets up the default parameters for ESSN feature matching.
+# Default: Keep top 10000 matching points by confidence.
+#
+# Usage in Python:
+#   import gin
+#   gin.parse_config_file('MOD_FeatureProcess/_gconfs/essn_default.gin')
+#
+# Matching Strategy Options:
+#   ('conf_thres', <float>)  - Fixed confidence threshold (e.g., 1.001)
+#   ('ratio', <float>)       - Keep top X% of matches (e.g., 0.1 for top 10%)
+#   ('num_pts', <int>)       - Keep top N matches by confidence (default: 10000)
+
+# All parameters are configured on the single entry point function
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.matching_strategy = ('num_pts', 1000)
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.dense_matching = False
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.pixel_tol = 5
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.skip_geometric_verification = False
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.min_len_track = 3
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.chunk_size = 4
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.subsample = 8
+MOD_FeatureProcess.ESSN_FeatureProcess.essn_run_mast3r_matching.viz = False

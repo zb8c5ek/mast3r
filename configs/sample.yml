@@ -1,0 +1,41 @@
+# Sample configuration for SKRIPT_Batched_DB_Generator
+# =====================================================
+
+# Input/Output paths
+paths:
+  images: "/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam1/p-15_y-10_r+0"
+  # output: Optional, if not specified, will be auto-generated from images path
+  # output: "/d_disk/_DataBuffer/RopeCap/output"
+
+# Batch processing parameters
+batch:
+  size: 30           # Number of images per batch
+  overlap: 15        # Number of overlapping images between batches (stride = size - overlap)
+  start_frame: 0     # Frame index to start from (0 = beginning, use to resume processing)
+  spacing: 1         # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
+
+# Mapper options: 'GLOMAP', 'COLMAP', or null to skip mapping
+mapper: null
+
+# Matching strategy options:
+#   Single strategy:
+#     type: 'conf_thres' | 'ratio' | 'num_pts'
+#     value: threshold value, ratio (0-1), or number of points
+#   Combined strategies (intersection/AND):
+#     combined:
+#       - [type: 'conf_thres', value: 2.5]
+#       - [type: 'num_pts', value: 1500]
+matching:
+  # Single strategy example:
+  type: 'num_pts'
+  value: 1000
+  
+  # Combined strategy example (uncomment to use):
+  # combined:
+  #   - [type: 'conf_thres', value: 2.5]
+  #   - [type: 'num_pts', value: 1500]
+
+# Model configuration (optional, defaults shown)
+# model:
+#   name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+#   checkpoint_dir: "checkpoints"
