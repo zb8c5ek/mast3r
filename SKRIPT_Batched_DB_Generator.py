@@ -527,8 +527,14 @@ def process_images_in_batches(
         
         # Create batch-specific output directory with full parameters in name
         # Format: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}_{strategy}
-        strategy_type, strategy_value = matching_strategy
-        strategy_str = f"{strategy_type}_{strategy_value}".replace('.', '_')
+        # Handle both single strategy tuple and list of strategies
+        if isinstance(matching_strategy, list):
+            strategy_parts = [f"{s_type}{str(s_val).replace('.', 'p').replace('-', 'm')}" 
+                            for s_type, s_val in matching_strategy]
+            strategy_str = "_".join(strategy_parts)
+        else:
+            strategy_type, strategy_value = matching_strategy
+            strategy_str = f"{strategy_type}_{strategy_value}".replace('.', '_')
         batch_output = dp_output / f"batch_{batch_num:03d}_f{start_idx:04d}_to_f{end_idx:04d}_sp{spacing}_bs{batch_size}_{strategy_str}"
         batch_output.mkdir(parents=True, exist_ok=True)
         
