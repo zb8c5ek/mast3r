@@ -128,7 +128,6 @@ def get_3D_model_from_scene(silent, scene_state, transparent_cams=False, cam_siz
     # Write PLY Out
     fn_ply_output = outfile.replace('.glb', '.ply')
     write_ply(fn_ply_output, pts, col)
-    # ==============
 
     scene.add_geometry(pct)
 
@@ -154,6 +153,33 @@ def get_3D_model_from_scene(silent, scene_state, transparent_cams=False, cam_siz
     scene.export(file_obj=outfile)
 
     return outfile
+
+
+def _format_strategy_for_foldername(matching_strategy):
+    """
+    Format matching strategy into a COLMAP-safe folder name string.
+    
+    Examples:
+        ('conf_thres', 2.5) -> 'conf_thres_2_50'
+        ('num_pts', 1500) -> 'num_pts_1500'
+        [('conf_thres', 2.5), ('num_pts', 1500)] -> 'conf_thres_2_50_num_pts_1500'
+    """
+    def format_single(strategy_type, strategy_value):
+        # Convert value to string, replace . with _ for decimals
+        if isinstance(strategy_value, float):
+            # Format with 2 decimal places, replace . with _
+            val_str = f"{strategy_value:.2f}".replace('.', '_')
+        else:
+            val_str = str(strategy_value)
+        return f"{strategy_type}_{val_str}"
+    
+    # Check if combined strategy (list of tuples)
+    if isinstance(matching_strategy, list):
+        parts = [format_single(st, sv) for st, sv in matching_strategy]
+        return "_".join(parts)
+    else:
+        strategy_type, strategy_value = matching_strategy
+        return format_single(strategy_type, strategy_value)
 
 
 def _run_pycolmap_mapper_subprocess(database_path: str, image_path: str, output_path: str):
@@ -232,27 +258,42 @@ def run_mapper_async(
         raise ValueError(f"Unknown mapper type: {mapper_type}")
 
 
-def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path):
+def _prepare_images_folder(outdir, filelist):
     """
-    Copy database and images to COLMAP-style folder structure.
+    Copy images to images/ subfolder first, so COLMAP database stores 
+    paths as 'images/filename.png' (COLMAP convention).
     
-    Output structure:
-        colmap_output_dir/
-        ├── images/
-        │   ├── image1.jpg
-        │   └── ...
-        ├── sparse/          (empty, ready for reconstruction)
-        └── database.db
+    Returns:
+        Tuple of (new_root_path, new_filelist) with images in images/ subfolder
     """
-    os.makedirs(colmap_output_dir, exist_ok=True)
-    
-    # Create images directory and copy images
-    images_dir = os.path.join(colmap_output_dir, 'images')
+    images_dir = os.path.join(outdir, 'images')
     os.makedirs(images_dir, exist_ok=True)
+    
+    new_filelist = []
     for src_path in filelist:
         dst_path = os.path.join(images_dir, os.path.basename(src_path))
         if not os.path.exists(dst_path):
             shutil.copy2(src_path, dst_path)
+        new_filelist.append(dst_path)
+    
+    # Root path is the output dir, so relative paths will be 'images/filename.png'
+    return outdir, new_filelist
+
+
+def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path):
+    """
+    Copy database to COLMAP-style folder structure.
+    Images should already be in images/ subfolder.
+    
+    Output structure:
+        colmap_output_dir/
+        ├── images/              # Already populated
+        │   ├── image1.jpg
+        │   └── ...
+        ├── sparse/              (empty, ready for reconstruction)
+        └── database.db
+    """
+    os.makedirs(colmap_output_dir, exist_ok=True)
     
     # Create sparse directory (empty, for later reconstruction)
     sparse_dir = os.path.join(colmap_output_dir, 'sparse')
@@ -262,7 +303,7 @@ def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_
     dst_db_path = os.path.join(colmap_output_dir, 'database.db')
     shutil.copy2(colmap_db_path, dst_db_path)
     
-    print(f"  Copied COLMAP structure to: {colmap_output_dir}")
+    print(f"  COLMAP structure ready at: {colmap_output_dir}")
     print(f"    - images/: {len(filelist)} images")
     print(f"    - database.db: copied")
     print(f"    - sparse/: created (empty)")
@@ -295,6 +336,10 @@ def get_reconstructed_scene(
     """
     silent = False
     image_size = 512
+    
+    # First copy images to images/ subfolder so COLMAP paths are 'images/filename.png'
+    root_path, filelist = _prepare_images_folder(outdir, filelist)
+    
     imgs = load_images(filelist, size=image_size, square_ok=True, verbose=not silent)
     assert len(imgs) > 1, "Need at least 2 images to run reconstruction"
 
@@ -304,8 +349,7 @@ def get_reconstructed_scene(
     pairs = make_pairs(imgs, scene_graph=scene_graph, prefilter=None, symmetrize=True, sim_mat=None)
     cache_dir = os.path.join(outdir, 'cache')
 
-    # Use original image path (like SCRIPT_Glomap_on_Images.py)
-    root_path = os.path.commonpath(filelist)
+    # Relative paths will now be 'images/filename.png'
     filelist_relpath = [
         os.path.relpath(filename, root_path).replace('\\', '/')
         for filename in filelist
@@ -527,8 +571,8 @@ def process_images_in_batches(
         
         # Create batch-specific output directory with full parameters in name
         # Format: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}_{strategy}
-        strategy_type, strategy_value = matching_strategy
-        strategy_str = f"{strategy_type}_{strategy_value}".replace('.', '_')
+        # Strategy string format: conf_thres_2_50 or conf_thres_2_50_num_pts_1500 (for combined)
+        strategy_str = _format_strategy_for_foldername(matching_strategy)
         batch_output = dp_output / f"batch_{batch_num:03d}_f{start_idx:04d}_to_f{end_idx:04d}_sp{spacing}_bs{batch_size}_{strategy_str}"
         batch_output.mkdir(parents=True, exist_ok=True)
         
