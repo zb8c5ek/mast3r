@@ -1,0 +1,89 @@
+# RopeCap Rig-Bubble Processor Configuration
+# ============================================
+# Processes groups with rig-bubbles (multiple cameras combined per bubble)
+#
+# Run with:
+#   python BURN-Scripts/BURN_template_RigBubble.py --config configs/ropecap_rigbubble_20260122.yaml
+
+# =============================================================================
+# PATHS (Linux container paths - D:\ mounted to /d_disk)
+# =============================================================================
+paths:
+  # Base path containing group_XXX folders (each with cam0-cam3 subfolders)
+  base_path: "/d_disk/_DataBuffer/RopeCap0121/17/undistort_fov110_p30y20_20260121_165059"
+  
+  # Output directory (optional - if not specified, auto-generates with timestamp)
+  # output: "/d_disk/_DataBuffer/RopeCap0121/17/mapping3r_rigbubble"
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+processing:
+  # Target pose folder to process in each camera (e.g., p+0_y+0_r+0)
+  target_pose: "p+0_y+0_r+0"
+  
+  # Frame stride - select every Nth frame (1 = all frames, 2 = every other frame)
+  stride_frame: 3
+  
+  # Whether to run pycolmap mapping after DB creation
+  run_mapping: true
+
+# =============================================================================
+# RIG BUBBLES CONFIGURATION
+# =============================================================================
+# Each bubble combines images from multiple cameras
+# The images are collected into: images/bubble_XX/camYY/
+rig_bubbles:
+  - name: "bubble_00"
+    cameras: ["cam0", "cam1"]
+  - name: "bubble_01"
+    cameras: ["cam0", "cam2"]
+  - name: "bubble_02"
+    cameras: ["cam1", "cam3"]
+
+# =============================================================================
+# MATCHING STRATEGY
+# =============================================================================
+matching:
+  type: 'num_pts'
+  value: 1000
+
+# =============================================================================
+# IMAGE PROCESSING
+# =============================================================================
+image:
+  size: 512
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+
+# =============================================================================
+# MAPPER OPTIONS (pycolmap incremental mapping)
+# =============================================================================
+mapper:
+  # Camera model for DB: SIMPLE_PINHOLE, PINHOLE, SIMPLE_RADIAL, OPENCV
+  camera_model: 'PINHOLE'
+  
+  # Allow multiple reconstruction models
+  multiple_models: false
+  
+  # Minimum number of matches for two-view geometry
+  min_num_matches: 15
+  
+  # Extract RGB colors for 3D points
+  extract_colors: true
+  
+  # Bundle Adjustment options
+  ba_refine_focal_length: true
+  ba_refine_principal_point: true
+  ba_refine_extra_params: false
+
+# =============================================================================
+# OPTIONAL: Filter which groups to process
+# =============================================================================
+# filters:
+#   groups: ['group_000', 'group_001']  # Only process these groups (empty = all)

@@ -1,0 +1,78 @@
+# RopeCap Group Processor Configuration
+# ======================================
+# Template for processing grouped camera folders with p+0_y+0_r+0 poses
+#
+# Copy this file and modify for each dataset run:
+#   configs/ropecap_YYYYMMDD_HHMMSS.yaml
+#
+# Run with:
+#   python BURN-Scripts/BURN_template_RopeCapGroup.py --config configs/ropecap_YYYYMMDD_HHMMSS.yaml
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  # Base path containing group_XXX folders (each with cam0-cam3 subfolders)
+  base_path: "D:/_DataBuffer/RopeCap/20260114_132205-hall_0/rgb-selected-640_890_undistort_fov90_5view_group40"
+  
+  # Output directory (optional - if not specified, auto-generates with timestamp)
+  # output: "D:/_DataBuffer/RopeCap/20260114_132205-hall_0/mapping3r-custom_name"
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+processing:
+  # Target pose folder to process in each camera (e.g., p+0_y+0_r+0)
+  target_pose: "p+0_y+0_r+0"
+  
+  # Whether to run pycolmap mapping after DB creation
+  run_mapping: true
+  
+  # Mapping timeout in seconds (per folder)
+  mapping_timeout: 600
+
+# =============================================================================
+# MATCHING STRATEGY
+# =============================================================================
+# Options:
+#   Single strategy:
+#     type: 'conf_thres' | 'ratio' | 'num_pts'
+#     value: threshold value, ratio (0-1), or number of points
+#   Combined strategies (intersection/AND):
+#     combined:
+#       - type: 'conf_thres'
+#         value: 2.5
+#       - type: 'num_pts'
+#         value: 1500
+matching:
+  # Single strategy (default)
+  type: 'num_pts'
+  value: 1000
+  
+  # Combined strategy example (uncomment to use):
+  # combined:
+  #   - type: 'conf_thres'
+  #     value: 2.0
+  #   - type: 'num_pts'
+  #     value: 1500
+
+# =============================================================================
+# IMAGE PROCESSING
+# =============================================================================
+image:
+  size: 512           # Maximum image dimension for MASt3R processing
+  scene_graph: 'complete'  # Scene graph type for pair generation
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+
+# =============================================================================
+# OPTIONAL: Filter which groups/cameras to process
+# =============================================================================
+# filters:
+#   groups: ['group_001', 'group_002']  # Only process these groups (empty = all)
+#   cameras: ['cam0', 'cam1']           # Only process these cameras (empty = all)

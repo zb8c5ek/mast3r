@@ -1,0 +1,51 @@
+# RopeCap Group Processor - TEST RUN (1 folder only)
+# ===================================================
+# Dataset: 20260114_132205-hall_0
+# Created: 2026-01-19 16:45:00
+# Purpose: Test run on single folder (group_001/cam0)
+#
+# Run with:
+#   python BURN-Scripts/BURN_template_RopeCapGroup.py --config configs/ropecap_20260119_TEST.yaml
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  base_path: "/d_disk/_DataBuffer/RopeCap/20260114_132205-hall_0/rgb-selected-640_890_undistort_fov90_5view_group40"
+  # output: auto-generated as mapping3r-YYYYMMDD_HHMMSS
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+processing:
+  target_pose: "p+0_y+0_r+0"
+  run_mapping: true
+  mapping_timeout: 600
+
+# =============================================================================
+# MATCHING STRATEGY
+# =============================================================================
+matching:
+  type: 'num_pts'
+  value: 1000
+
+# =============================================================================
+# IMAGE PROCESSING
+# =============================================================================
+image:
+  size: 512
+  scene_graph: 'complete'
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+
+# =============================================================================
+# FILTER: Only process group_001/cam0 for testing
+# =============================================================================
+filters:
+  groups: ['group_001']
+  cameras: ['cam0']

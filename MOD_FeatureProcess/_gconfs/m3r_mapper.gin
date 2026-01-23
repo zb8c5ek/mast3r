@@ -1,0 +1,24 @@
+# =============================================================================
+# MASt3R Mapper Default Configuration (m3r_mapper_default.gin)
+# =============================================================================
+# Default config for pycolmap incremental mapping after MASt3R feature extraction
+
+# =============================================================================
+# Camera Model
+# =============================================================================
+# Options: SIMPLE_PINHOLE, PINHOLE, SIMPLE_RADIAL, OPENCV
+camera_model = 'PINHOLE'
+
+# =============================================================================
+# Mapper Options
+# =============================================================================
+multiple_models = False
+min_num_matches = 15
+extract_colors = True
+
+# =============================================================================
+# Bundle Adjustment
+# =============================================================================
+ba_refine_focal_length = True
+ba_refine_principal_point = True
+ba_refine_extra_params = False
