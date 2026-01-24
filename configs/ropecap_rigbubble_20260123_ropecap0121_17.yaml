@@ -1,0 +1,117 @@
+# RopeCap Rig-Bubble Processor Configuration
+# ============================================
+# Dataset: RopeCap0121/17/undistort_fov110_p30y20_20260121_165059
+# Created: 2026-01-23
+# Purpose: Process camera pairs/combinations with shared intrinsics (no distortion)
+#
+# Run with:
+#   python BURN-Scripts/BURN_template_RigBubble.py --config configs/ropecap_rigbubble_20260123_ropecap0121_17.yaml
+#
+# Docker command:
+#   docker run --rm -it --gpus=all --shm-size=8g -v D:/:/d_disk m3rslam \
+#     bash -c "cd /d_disk/mast3r && /root/.local/bin/micromamba run -n slam3r_p310_c126_t270 \
+#     python BURN-Scripts/BURN_template_RigBubble.py --config configs/ropecap_rigbubble_20260123_ropecap0121_17.yaml"
+
+# =============================================================================
+# PATHS (Linux container paths - D:\ mounted to /d_disk)
+# =============================================================================
+paths:
+  base_path: "/d_disk/_DataBuffer/RopeCap0121/17/undistort_fov110_p30y20_20260121_165059"
+  
+  # Output directory (optional - if not specified, auto-generates with timestamp)
+  output: "/d_disk/_DataBuffer/RopeCap0121/17/mapping3r_rigbubble_20260123"
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+processing:
+  # Target pose folder to process in each camera
+  target_pose: "p+0_y+0_r+0"
+  
+  # Frame stride - select every Nth frame (1 = all frames, 2 = every other)
+  stride_frame: 1
+  
+  # Whether to run pycolmap mapping after DB creation
+  run_mapping: true
+
+# =============================================================================
+# RIG BUBBLES CONFIGURATION
+# =============================================================================
+# Define camera combinations for pairwise/multi-camera reconstruction
+# Cameras can appear in multiple bubbles
+rig_bubbles:
+  # Pairwise combinations
+  - name: "bubble_00_cam0_cam1"
+    cameras: ["cam0", "cam1"]
+  
+  - name: "bubble_01_cam0_cam2"
+    cameras: ["cam0", "cam2"]
+  
+  - name: "bubble_02_cam0_cam3"
+    cameras: ["cam0", "cam3"]
+  
+  - name: "bubble_03_cam1_cam2"
+    cameras: ["cam1", "cam2"]
+  
+  - name: "bubble_04_cam1_cam3"
+    cameras: ["cam1", "cam3"]
+  
+  - name: "bubble_05_cam2_cam3"
+    cameras: ["cam2", "cam3"]
+  
+  # Optional: 3-camera combinations
+  # - name: "bubble_06_cam0_cam1_cam2"
+  #   cameras: ["cam0", "cam1", "cam2"]
+  # 
+  # - name: "bubble_07_cam0_cam1_cam3"
+  #   cameras: ["cam0", "cam1", "cam3"]
+
+# =============================================================================
+# MATCHING STRATEGY
+# =============================================================================
+matching:
+  type: 'num_pts'
+  value: 1500
+
+# =============================================================================
+# IMAGE PROCESSING
+# =============================================================================
+image:
+  size: 512
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+
+# =============================================================================
+# MAPPER OPTIONS (pycolmap incremental mapping)
+# =============================================================================
+# Configured for shared intrinsics and no distortion
+mapper:
+  # Camera model: PINHOLE (fx, fy, cx, cy - no distortion)
+  camera_model: 'PINHOLE'
+  
+  # Allow multiple reconstruction models
+  multiple_models: false
+  
+  # Minimum number of matches for two-view geometry
+  min_num_matches: 15
+  
+  # Extract RGB colors for 3D points
+  extract_colors: true
+  
+  # Bundle Adjustment: Refine focal length and principal point
+  # Since data is undistorted, we don't refine distortion params
+  ba_refine_focal_length: true
+  ba_refine_principal_point: true
+  ba_refine_extra_params: false  # No distortion parameters
+
+# =============================================================================
+# OPTIONAL: Filter which groups to process
+# =============================================================================
+# Uncomment to process only specific groups
+# filters:
+#   groups: ['group_000', 'group_001', 'group_002']

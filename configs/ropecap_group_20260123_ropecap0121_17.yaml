@@ -1,0 +1,63 @@
+# RopeCap Group Processor Configuration
+# ========================================
+# Dataset: RopeCap0121/17/undistort_fov110_p30y20_20260121_165059
+# Created: 2026-01-23
+# Purpose: Process each camera separately with shared intrinsics (no distortion)
+#
+# Run with:
+#   python BURN-Scripts/BURN_template_RopeCapGroup.py --config configs/ropecap_group_20260123_ropecap0121_17.yaml
+#
+# Docker command:
+#   docker run --rm -it --gpus=all --shm-size=8g -v D:/:/d_disk m3rslam \
+#     bash -c "cd /d_disk/mast3r && /root/.local/bin/micromamba run -n slam3r_p310_c126_t270 \
+#     python BURN-Scripts/BURN_template_RopeCapGroup.py --config configs/ropecap_group_20260123_ropecap0121_17.yaml"
+
+# =============================================================================
+# PATHS (Linux container paths - D:\ mounted to /d_disk)
+# =============================================================================
+paths:
+  base_path: "/d_disk/_DataBuffer/RopeCap0121/17/undistort_fov110_p30y20_20260121_165059"
+  
+  # Output directory (optional - if not specified, auto-generates with timestamp)
+  output: "/d_disk/_DataBuffer/RopeCap0121/17/mapping3r_group_20260123"
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+processing:
+  # Target pose folder to process in each camera
+  target_pose: "p+0_y+0_r+0"
+  
+  # Whether to run pycolmap mapping after DB creation
+  run_mapping: true
+  
+  # Timeout for mapping (seconds) - 600s = 10 minutes
+  mapping_timeout: 600
+
+# =============================================================================
+# MATCHING STRATEGY
+# =============================================================================
+matching:
+  type: 'num_pts'
+  value: 1500
+
+# =============================================================================
+# IMAGE PROCESSING
+# =============================================================================
+image:
+  size: 512
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+
+# =============================================================================
+# OPTIONAL: Filter which groups/cameras to process
+# =============================================================================
+# Uncomment to process only specific groups/cameras
+# filters:
+#   groups: ['group_000', 'group_001', 'group_002']
+#   cameras: ['cam0', 'cam1']

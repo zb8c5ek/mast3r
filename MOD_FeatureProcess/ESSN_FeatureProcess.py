@@ -46,7 +46,8 @@ def essn_run_mast3r_matching(
         matching_strategy: MatchingStrategy = ('num_pts', 10000),
         skip_geometric_verification: bool = False,
         min_len_track: int = 3,
-        chunk_size: int = 4,
+        chunk_size: int = 16,
+        batch_size: int = 16,
         subsample: int = 8,
         viz: bool = False
 ):
@@ -73,7 +74,8 @@ def essn_run_mast3r_matching(
             - ('num_pts', int): Keep top N matches by confidence (default: 10000)
         skip_geometric_verification: Whether to skip geometric verification (default: False)
         min_len_track: Minimum track length (default: 3)
-        chunk_size: Batch size for inference chunks (default: 4)
+        chunk_size: Number of pairs to process per chunk (default: 16)
+        batch_size: Batch size for MASt3R inference (default: 16, increase for more VRAM)
         subsample: Subsampling factor for sparse matching (default: 8)
         viz: Whether to visualize matches (default: False)
         
@@ -119,7 +121,7 @@ def essn_run_mast3r_matching(
     pbar = tqdm(range(0, len(matching_pairs), chunk_size), desc="Matching")
     for chunk in pbar:
         pairs_chunk = matching_pairs[chunk:chunk + chunk_size]
-        output = inference(pairs_chunk, model, device, batch_size=4, verbose=False)
+        output = inference(pairs_chunk, model, device, batch_size=batch_size, verbose=False)
         pred1, pred2 = output['pred1'], output['pred2']
         
         # Call kern function with all parameters passed down

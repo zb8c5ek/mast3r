@@ -1,0 +1,114 @@
+# RopeCap Rig-Bubble Processor Configuration (Camera Pairs)
+# ============================================================
+# Dataset: RopeCap0121/17/undistort_fov110_p30y20_20260121_165059
+# Created: 2026-01-23
+# Purpose: Process camera pairs/combinations with per-subfolder shared intrinsics
+#
+# Run with:
+#   python BURN-Scripts/BURN_template_RigBubble.py --config configs/ropecap_rigbubble_20260123.yaml
+#
+# Docker command:
+#   docker run --rm -it --gpus=all --shm-size=8g -v D:/:/d_disk m3rslam \
+#     bash -c "cd /d_disk/mast3r && /root/.local/bin/micromamba run -n slam3r_p310_c126_t270 \
+#     python BURN-Scripts/BURN_template_RigBubble.py --config configs/ropecap_rigbubble_20260123.yaml"
+
+# =============================================================================
+# PATHS (Linux container paths - D:\ mounted to /d_disk)
+# =============================================================================
+paths:
+  base_path: "/d_disk/_DataBuffer/RopeCap0121/17/undistort_fov110_p30y20_20260121_165059"
+  
+  # Output directory - auto-generates as mapping3r_rigbubble_YYYYMMDD_HHMMSS if not specified
+  # output: "/d_disk/_DataBuffer/RopeCap0121/17/mapping3r_rigbubble_20260123"
+
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
+processing:
+  # Target pose folder to process in each camera
+  target_pose: "p+0_y+0_r+0"
+  
+  # Frame stride - select every Nth frame (1 = all frames, 2 = every other)
+  stride_frame: 1
+  
+  # Whether to run pycolmap mapping after DB creation
+  run_mapping: true
+  
+  # Async mapping: run pycolmap in background subprocess while GPU continues
+  # This allows CPU-based mapping to run in parallel with GPU-based MASt3R inference
+  async_mapping: true
+
+# =============================================================================
+# RIG BUBBLES CONFIGURATION
+# =============================================================================
+# Define camera combinations for pairwise/multi-camera reconstruction
+# Cameras can appear in multiple bubbles
+# Images are organized as: images/cam0/, images/cam1/ - each subfolder shares intrinsics
+rig_bubbles:
+  # Three bubble combinations as specified
+  - name: "bubble_00"
+    cameras: ["cam0", "cam1"]
+  
+  - name: "bubble_01"
+    cameras: ["cam0", "cam2"]
+  
+  - name: "bubble_02"
+    cameras: ["cam1", "cam3"]
+
+# =============================================================================
+# MATCHING STRATEGY
+# =============================================================================
+matching:
+  type: 'num_pts'
+  value: 1500
+
+# =============================================================================
+# INFERENCE OPTIONS (MASt3R neural network)
+# =============================================================================
+inference:
+  # Batch size for GPU inference (higher = more VRAM, faster)
+  # With 48GB VRAM, use 16-24. With 24GB use 8-12.
+  batch_size: 16
+
+# =============================================================================
+# IMAGE PROCESSING
+# =============================================================================
+image:
+  size: 512
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+
+# =============================================================================
+# MAPPER OPTIONS (pycolmap incremental mapping)
+# =============================================================================
+# IMPORTANT: share_intrinsics_by_subfolder=true means:
+#   - Images in images/cam0/ share ONE camera (PINHOLE with same intrinsics)
+#   - Images in images/cam1/ share ANOTHER camera (PINHOLE with same intrinsics)
+#   - This is correct for multi-camera rigs where each physical camera has fixed intrinsics
+mapper:
+  # Camera model: PINHOLE (fx, fy, cx, cy - no distortion)
+  camera_model: 'PINHOLE'
+  
+  # Share intrinsics by subfolder (each camera folder shares one camera)
+  share_intrinsics_by_subfolder: true
+  
+  # Allow multiple reconstruction models
+  multiple_models: false
+  
+  # Minimum number of matches for two-view geometry
+  min_num_matches: 15
+  
+  # Extract RGB colors for 3D points
+  extract_colors: true
+
+# =============================================================================
+# OPTIONAL: Filter which groups to process
+# =============================================================================
+# Uncomment to process only specific groups
+# filters:
+#   groups: ['group_000', 'group_001', 'group_002']
