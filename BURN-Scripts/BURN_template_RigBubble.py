@@ -33,13 +33,8 @@ from typing import List, Dict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mast3r.model import AsymmetricMASt3R
-from MOD_FeatureProcess.ESSN_CreateDBfromFolder import (
-    create_db_from_folder_with_structure,
-    run_pycolmap_mapping,
-    start_mapping_async,
-    get_mapping_job_manager,
-    wait_all_mapping_jobs
-)
+from MOD_FeatureProcess.ESSN_CreateDBfromFolder import create_db_from_folder_with_structure, run_pycolmap_mapping
+from Utils4BurnScript import MappingJobManager
 
 
 def load_config(config_path: str) -> dict:
@@ -85,26 +80,21 @@ def prepare_bubble_images(images_by_cam: Dict[str, List[Path]], output_dir: Path
 
 
 def process_single_bubble(model, images_by_cam: Dict[str, List[Path]], dp_output: Path,
-                          matching_strategy, image_size: int = 512, run_mapping: bool = True,
-                          camera_model: str = 'PINHOLE', mapper_options: dict = None,
+                          matching_strategy, image_size: int = 512,
+                          camera_model: str = 'PINHOLE',
                           share_intrinsics_by_subfolder: bool = True,
-                          batch_size: int = 16,
-                          async_mapping: bool = False) -> dict:
-    """Process a single bubble: create DB and run mapping.
+                          batch_size: int = 16) -> dict:
+    """Process a single bubble: create DB only. Mapping handled by MappingJobManager.
     
     Args:
         share_intrinsics_by_subfolder: If True, images in each camera subfolder (images/cam0/, images/cam1/)
                                        share the same camera intrinsics. Default True for multi-camera rigs.
         batch_size: Batch size for MASt3R inference (default: 16).
-        async_mapping: If True, run mapping in background subprocess (returns immediately).
     """
     result = {
         'output_path': str(dp_output), 'cameras': list(images_by_cam.keys()),
-        'db_success': False, 'mapping_success': False,
-        'mapping_pending': False, 'mapping_job_id': None,
-        'db_time': 0, 'mapping_time': 0,
-        'num_images': 0, 'num_pairs': 0,
-        'num_registered': 0, 'num_points3d': 0, 'error': None
+        'db_success': False, 'db_path': None,
+        'db_time': 0, 'num_images': 0, 'num_pairs': 0, 'error': None
     }
     
     total_images = sum(len(imgs) for imgs in images_by_cam.values())
@@ -119,8 +109,6 @@ def process_single_bubble(model, images_by_cam: Dict[str, List[Path]], dp_output
         root_path, filelist_relpath = prepare_bubble_images(images_by_cam, dp_output)
         
         # Create database with specified camera model
-        # share_intrinsics_by_subfolder=True means images in images/cam0/ share one camera,
-        # images in images/cam1/ share another camera, etc.
         db_result = create_db_from_folder_with_structure(
             root_path=root_path, filelist_relpath=filelist_relpath,
             dp_output=dp_output, model=model,
@@ -132,35 +120,10 @@ def process_single_bubble(model, images_by_cam: Dict[str, List[Path]], dp_output
         result['db_success'] = db_result['success']
         result['db_time'] = db_result.get('processing_time', 0)
         result['num_pairs'] = db_result.get('num_pairs', 0)
+        result['db_path'] = db_result.get('database_path')
         
         if not db_result['success']:
             result['error'] = db_result.get('error', 'Unknown DB error')
-            return result
-        
-        # Run mapping
-        if run_mapping and db_result['database_path']:
-            sparse_path = dp_output / 'sparse'
-            
-            if async_mapping:
-                # Start mapping in background subprocess
-                job_id = start_mapping_async(
-                    db_result['database_path'], dp_output, sparse_path,
-                    mapper_options=mapper_options
-                )
-                result['mapping_pending'] = True
-                result['mapping_job_id'] = job_id
-            else:
-                # Run mapping synchronously (blocking)
-                map_result = run_pycolmap_mapping(
-                    db_result['database_path'], dp_output, sparse_path,
-                    mapper_options=mapper_options
-                )
-                result['mapping_success'] = map_result['success']
-                result['mapping_time'] = map_result['time']
-                result['num_registered'] = map_result['num_registered']
-                result['num_points3d'] = map_result['num_points3d']
-                if not map_result['success']:
-                    result['error'] = map_result.get('error', 'Mapping failed')
                 
     except Exception as e:
         result['error'] = str(e)
@@ -237,6 +200,7 @@ def process_all_groups(config: dict, model) -> dict:
     stride_frame = processing_cfg.get('stride_frame', 1)
     run_mapping = processing_cfg.get('run_mapping', True)
     async_mapping = processing_cfg.get('async_mapping', True)  # Default: run mapping in background
+    mapping_timeout = processing_cfg.get('mapping_timeout', 1800)  # Default: 30 minutes
     matching_strategy = parse_matching_strategy(match_cfg)
     image_size = image_cfg.get('size', 512)
     
@@ -260,9 +224,13 @@ def process_all_groups(config: dict, model) -> dict:
     print(f"Base: {base_path}\nOutput: {output_base}\nGroups: {len(group_folders)}\nStride: {stride_frame}")
     print(f"Camera model: {camera_model}, Share intrinsics by subfolder: {share_intrinsics}")
     print(f"Inference batch_size: {batch_size}")
-    print(f"Async mapping: {async_mapping} (run mapping in background)\n{'='*80}\n")
+    print(f"Async mapping: {async_mapping}, Timeout: {mapping_timeout}s ({mapping_timeout/60:.0f} min)\n{'='*80}\n")
     
     output_base.mkdir(parents=True, exist_ok=True)
+    
+    # Create mapping job manager (for async mapping with live dashboard)
+    job_mgr = MappingJobManager(dashboard_dir=output_base) if async_mapping else None
+    
     with open(output_base / 'config_used.yaml', 'w') as f:
         yaml.dump(config, f)
     
@@ -286,29 +254,66 @@ def process_all_groups(config: dict, model) -> dict:
             print(f"    Images: {total_imgs} ({', '.join(f'{k}:{len(v)}' for k,v in images_by_cam.items())})")
             
             dp_output = output_base / group_name / bubble_name
-            result = process_single_bubble(model, images_by_cam, dp_output, matching_strategy, image_size, run_mapping,
-                                           camera_model=camera_model, mapper_options=mapper_cfg,
-                                           share_intrinsics_by_subfolder=share_intrinsics,
-                                           batch_size=batch_size,
-                                           async_mapping=async_mapping)
+            
+            # Step 1: Create database (GPU-intensive)
+            result = process_single_bubble(
+                model, images_by_cam, dp_output, matching_strategy, image_size,
+                camera_model=camera_model,
+                share_intrinsics_by_subfolder=share_intrinsics,
+                batch_size=batch_size
+            )
+            
+            # Initialize mapping result fields
+            result['mapping_success'] = False
+            result['mapping_job_id'] = None
+            result['mapping_time'] = 0
+            result['num_registered'] = 0
+            result['num_points3d'] = 0
             
             all_results['groups'][group_name][bubble_name] = result
             group_results['bubbles'][bubble_name] = result
             all_results['total_processed'] += 1
             
-            # Print status based on sync/async mode
-            if result['mapping_pending']:
-                # Async mode - mapping is running in background
-                print(f"    DB OK: {result['num_images']} imgs, {result['num_pairs']} pairs ({result['db_time']:.1f}s)")
-                print(f"    [BG] Mapping started: {result['mapping_job_id']}")
-            elif result['db_success'] and (not run_mapping or result['mapping_success']):
-                all_results['total_success'] += 1
-                print(f"    OK Reg: {result['num_registered']}/{result['num_images']}, Pts: {result['num_points3d']}")
-                print(f"    Time: DB {result['db_time']:.1f}s, Map {result['mapping_time']:.1f}s")
-            else:
+            if not result['db_success']:
                 all_results['total_failed'] += 1
-                print(f"    FAIL {result.get('error', 'Failed')}")
-                print(f"    Time: DB {result['db_time']:.1f}s")
+                print(f"    DB FAIL: {result.get('error', 'Unknown')}")
+                continue
+            
+            print(f"    DB OK: {result['num_images']} imgs, {result['num_pairs']} pairs ({result['db_time']:.1f}s)")
+            
+            # Step 2: Start mapping (async or sync)
+            if run_mapping and result['db_path']:
+                sparse_path = dp_output / 'sparse'
+                job_name = f"{group_name}/{bubble_name}"
+                
+                if async_mapping:
+                    # Start mapping in background - GPU is free for next DB
+                    job_id = job_mgr.start_job(
+                        name=job_name,
+                        database_path=result['db_path'],
+                        image_path=dp_output,
+                        output_path=sparse_path,
+                        mapper_options=mapper_cfg if mapper_cfg else None
+                    )
+                    result['mapping_job_id'] = job_id
+                else:
+                    # Sync mapping (blocking)
+                    map_result = run_pycolmap_mapping(
+                        result['db_path'], dp_output, sparse_path,
+                        mapper_options=mapper_cfg if mapper_cfg else None
+                    )
+                    result['mapping_success'] = map_result['success']
+                    result['mapping_time'] = map_result['time']
+                    result['num_registered'] = map_result['num_registered']
+                    result['num_points3d'] = map_result['num_points3d']
+                    
+                    if map_result['success']:
+                        all_results['total_success'] += 1
+                        print(f"    Map OK: Reg {result['num_registered']}, Pts {result['num_points3d']} ({result['mapping_time']:.1f}s)")
+                    else:
+                        all_results['total_failed'] += 1
+                        result['error'] = map_result.get('error', 'Mapping failed')
+                        print(f"    Map FAIL: {result['error']}")
         
         # Save per-group JSON report
         group_report_path = output_base / group_name / f"{group_name}_report.json"
@@ -316,56 +321,29 @@ def process_all_groups(config: dict, model) -> dict:
         with open(group_report_path, 'w') as f:
             json.dump(group_results, f, indent=2)
     
-    # Wait for all async mapping jobs to complete
-    mgr = get_mapping_job_manager()
-    if mgr.jobs:
-        print(f"\n{'='*60}")
-        print(f"Waiting for {len(mgr.jobs)} background mapping jobs...")
-        print(f"{'='*60}")
+    # Wait for all async mapping jobs
+    if async_mapping and run_mapping and job_mgr.jobs:
+        mapping_results = job_mgr.wait_all(timeout=mapping_timeout)
         
-        # Poll and show progress every 5 seconds
-        import time as time_module
-        while True:
-            all_done = True
-            for job_id in list(mgr.jobs.keys()):
-                job_result = mgr.check_job(job_id)
-                if job_result is None:
-                    all_done = False
-            
-            if all_done:
-                break
-            
-            # Print status update
-            print(f"\n  Status at {time() - start_time:.0f}s:")
-            mgr.print_status()
-            time_module.sleep(5)
-        
-        # Collect results and update totals
-        print(f"\n  All mapping jobs completed!")
+        # Collect results back into all_results
         for group_name, bubbles in all_results['groups'].items():
             for bubble_name, result in bubbles.items():
-                if result.get('mapping_pending') and result.get('mapping_job_id'):
-                    job_id = result['mapping_job_id']
-                    map_result = mgr.check_job(job_id)
-                    if map_result:
-                        result['mapping_pending'] = False
-                        result['mapping_success'] = map_result.get('success', False)
-                        result['mapping_time'] = map_result.get('time', 0)
-                        result['num_registered'] = map_result.get('num_registered', 0)
-                        result['num_points3d'] = map_result.get('num_points3d', 0)
-                        if not map_result.get('success'):
-                            result['error'] = map_result.get('error', 'Mapping failed')
-                        
-                        # Update totals
-                        if result['db_success'] and result['mapping_success']:
-                            all_results['total_success'] += 1
-                        else:
-                            all_results['total_failed'] += 1
-                        
-                        status = "OK" if result['mapping_success'] else "FAIL"
-                        print(f"    [{job_id}] {group_name}/{bubble_name}: {status} "
-                              f"Reg: {result['num_registered']}, Pts: {result['num_points3d']}, "
-                              f"Time: {result['mapping_time']:.1f}s")
+                job_id = result.get('mapping_job_id')
+                if job_id and job_id in mapping_results:
+                    map_result = mapping_results[job_id]
+                    result['mapping_success'] = map_result.get('success', False)
+                    result['mapping_time'] = map_result.get('elapsed', 0)
+                    result['num_registered'] = map_result.get('num_registered', 0)
+                    result['num_points3d'] = map_result.get('num_points3d', 0)
+                    if not map_result.get('success'):
+                        result['error'] = map_result.get('error', 'Mapping failed')
+                    
+                    if result['db_success'] and result['mapping_success']:
+                        all_results['total_success'] += 1
+                    else:
+                        all_results['total_failed'] += 1
+        
+        job_mgr.print_summary()
     
     all_results['total_time'] = time() - start_time
     

@@ -37,6 +37,10 @@ processing:
   # Async mapping: run pycolmap in background subprocess while GPU continues
   # This allows CPU-based mapping to run in parallel with GPU-based MASt3R inference
   async_mapping: true
+  
+  # Timeout for each mapping job (seconds). Jobs exceeding this are killed.
+  # Set to 0 or remove to disable timeout. Default: 1800 (30 minutes)
+  mapping_timeout: 1800
 
 # =============================================================================
 # RIG BUBBLES CONFIGURATION

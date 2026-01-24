@@ -516,8 +516,13 @@ class MappingJobManager:
         print(f"    [BG] Started mapping job {job_id} (PID: {job.process.pid})")
         return job
     
-    def check_job(self, job_id: str) -> Optional[dict]:
-        """Check job status. Returns result dict if finished, None if still running."""
+    def check_job(self, job_id: str, timeout: float = 0) -> Optional[dict]:
+        """Check job status. Returns result dict if finished, None if still running.
+        
+        Args:
+            job_id: Job identifier
+            timeout: If > 0, kill job if it exceeds this many seconds. Default 0 (no timeout).
+        """
         if job_id not in self.jobs:
             return {"error": f"Unknown job: {job_id}"}
         
@@ -538,8 +543,31 @@ class MappingJobManager:
             except:
                 pass
         
+        # Check timeout - kill if exceeded
+        elapsed = time() - job.started_at
+        if timeout > 0 and elapsed > timeout and poll is None:
+            print(f"    [TIMEOUT] Killing {job_id} after {elapsed:.0f}s (limit: {timeout}s)")
+            job.process.kill()
+            job.process.wait()  # Wait for process to terminate
+            job.finished = True
+            job.result = {
+                'success': False,
+                'error': f'Timeout after {elapsed:.0f}s',
+                'status': 'timeout',
+                'time': elapsed,
+                'num_registered': 0,
+                'num_points3d': 0
+            }
+            # Cleanup temp files
+            if job.status_file and job.status_file.exists():
+                job.status_file.unlink()
+            worker_script = job.output_path / '.mapping_worker.py'
+            if worker_script.exists():
+                worker_script.unlink()
+            return job.result
+        
         if poll is not None:
-            # Process finished
+            # Process finished normally
             job.finished = True
             job.result = status
             job.result['time'] = time() - job.started_at
