@@ -48,9 +48,9 @@ mapper:
   min_num_matches: 15
   multiple_models: false
   extract_colors: true
-  # Disable intrinsic refinement (use fixed calibration)
-  ba_refine_focal_length: false
-  ba_refine_principal_point: false
+  # enable/Disable intrinsic refinement (use or not fixed calibration)
+  ba_refine_focal_length: true
+  ba_refine_principal_point: true 
   ba_refine_extra_params: false
 
 # Process all groups and cameras
