@@ -1,0 +1,55 @@
+# RopeCap Multi-Pose Configuration - LEFT-RIGHT TEST
+# Single camera + multiple poses -> single COLMAP DB
+# ================================================
+# NOTE: Runs in Docker where D:\ is mounted as /d_disk
+
+# Model settings
+model:
+  name: MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric
+  checkpoint_dir: checkpoints
+
+# Paths (Docker paths - D:\ mounted as /d_disk)
+paths:
+  base_path: "/d_disk/_DataBuffer/RopeCap0121/17/undistort_fov110_p30y20_20260121_165059"
+  output: null  # Auto-generate: mapping3r_multipose-YYYYMMDD_HHMMSS
+
+# Processing settings
+processing:
+  # Left-Right pose combination
+  target_poses:
+    - "p+30_y+0_r+0"   # Right/tilted
+    - "p+0_y+0_r+0"    # Center
+    - "p-30_y+0_r+0"   # Left/tilted
+  
+  stride_frame: 2        # Use every 2nd frame for faster test
+  run_mapping: true
+  async_mapping: true    # Background mapping with live dashboard
+  mapping_timeout: 1500   # 10 minutes per job for test
+
+# Matching strategy - combined (AND logic)
+matching:
+  combined:
+    - type: conf_thres
+      value: 2.0
+    - type: num_pts
+      value: 1500
+
+# Image settings
+image:
+  size: 512
+
+# Inference settings (MASt3R)
+inference:
+  batch_size: 16
+
+# COLMAP mapper settings
+mapper:
+  camera_model: PINHOLE
+  min_num_matches: 15
+  multiple_models: false
+  extract_colors: true
+
+# TEST: Only process 1 group, 2 cameras
+filters:
+  groups: ["group_000"]
+  cameras: ["cam0", "cam1"]

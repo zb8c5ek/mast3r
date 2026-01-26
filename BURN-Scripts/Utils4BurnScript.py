@@ -25,8 +25,10 @@ MAPPING_WORKER_SCRIPT = '''
 import sys
 import json
 import pycolmap
+import sqlite3
+import threading
 from pathlib import Path
-from time import time
+from time import time, sleep
 from datetime import datetime
 
 def run_mapping(db_path, img_path, out_path, opts_json, log_file, job_id):
@@ -44,19 +46,60 @@ def run_mapping(db_path, img_path, out_path, opts_json, log_file, job_id):
         "messages": []
     }
     start = time()
+    stop_monitor = threading.Event()
     
     def update_log(msg):
         log["elapsed"] = time() - start
         log["updated_at"] = datetime.now().isoformat()
         log["messages"].append({"t": f"{log['elapsed']:.1f}s", "msg": msg})
-        if len(log["messages"]) > 50:
-            log["messages"] = log["messages"][-50:]
+        if len(log["messages"]) > 100:
+            log["messages"] = log["messages"][-100:]
         with open(log_file, "w") as f:
             json.dump(log, f, indent=2)
+    
+    def monitor_progress():
+        """Background thread to monitor reconstruction progress."""
+        last_images = 0
+        last_points = 0
+        while not stop_monitor.is_set():
+            try:
+                recon_path = Path(out_path) / "0"
+                if recon_path.exists():
+                    try:
+                        recon = pycolmap.Reconstruction(str(recon_path))
+                        n_img = recon.num_reg_images()
+                        n_pts = recon.num_points3D()
+                        if n_img != last_images or n_pts != last_points:
+                            log["num_registered"] = n_img
+                            log["num_points3d"] = n_pts
+                            update_log(f"Progress: {n_img} images registered, {n_pts} 3D points")
+                            last_images = n_img
+                            last_points = n_pts
+                    except:
+                        pass
+            except:
+                pass
+            stop_monitor.wait(30)  # Check every 30 seconds
     
     try:
         out_path = Path(out_path)
         out_path.mkdir(parents=True, exist_ok=True)
+        
+        # Read database info
+        update_log("Reading database info...")
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM images")
+            n_images = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM two_view_geometries WHERE rows > 0")
+            n_pairs = cur.fetchone()[0]
+            cur.execute("SELECT SUM(rows) FROM two_view_geometries WHERE rows > 0")
+            total_matches = cur.fetchone()[0] or 0
+            conn.close()
+            update_log(f"Database: {n_images} images, {n_pairs} verified pairs, {total_matches} total matches")
+        except Exception as e:
+            update_log(f"Could not read DB info: {e}")
         
         update_log("Initializing mapper options")
         opts = pycolmap.IncrementalPipelineOptions()
@@ -65,12 +108,49 @@ def run_mapping(db_path, img_path, out_path, opts_json, log_file, job_id):
             mapper_options = json.loads(opts_json)
             if "min_num_matches" in mapper_options:
                 opts.min_num_matches = mapper_options["min_num_matches"]
+                update_log(f"  min_num_matches = {opts.min_num_matches}")
             if "multiple_models" in mapper_options:
                 opts.multiple_models = mapper_options["multiple_models"]
             if "extract_colors" in mapper_options:
                 opts.extract_colors = mapper_options["extract_colors"]
+            
+            # Bundle adjustment refinement options
+            # Try different pycolmap API paths for BA options
+            ba_opts = None
+            for attr in ['ba_options', 'bundle_adjustment', 'mapper']:
+                if hasattr(opts, attr):
+                    ba_opts = getattr(opts, attr)
+                    break
+            
+            if ba_opts is None:
+                ba_opts = opts  # Try setting directly on opts
+            
+            for opt_name in ["ba_refine_focal_length", "ba_refine_principal_point", "ba_refine_extra_params"]:
+                if opt_name in mapper_options:
+                    val = mapper_options[opt_name]
+                    # Try setting on ba_opts first, then opts
+                    set_success = False
+                    for target in [ba_opts, opts]:
+                        if hasattr(target, opt_name):
+                            setattr(target, opt_name, val)
+                            update_log(f"  {opt_name} = {val}")
+                            set_success = True
+                            break
+                        # Also try without ba_ prefix
+                        short_name = opt_name.replace("ba_", "")
+                        if hasattr(target, short_name):
+                            setattr(target, short_name, val)
+                            update_log(f"  {short_name} = {val}")
+                            set_success = True
+                            break
+                    if not set_success:
+                        update_log(f"  WARNING: Could not set {opt_name} (not found in pycolmap API)")
         
-        update_log("Starting incremental mapping...")
+        # Start progress monitor thread
+        monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+        monitor_thread.start()
+        
+        update_log("Starting incremental mapping (this may take a while)...")
         pycolmap.incremental_mapping(
             database_path=str(db_path),
             image_path=str(img_path),
@@ -78,7 +158,10 @@ def run_mapping(db_path, img_path, out_path, opts_json, log_file, job_id):
             options=opts
         )
         
-        update_log("Reading reconstruction stats")
+        # Stop monitor
+        stop_monitor.set()
+        
+        update_log("Mapping finished, reading final stats...")
         recon_path = out_path / "0"
         if recon_path.exists():
             try:
@@ -86,12 +169,12 @@ def run_mapping(db_path, img_path, out_path, opts_json, log_file, job_id):
                 log["num_registered"] = recon.num_reg_images()
                 log["num_points3d"] = recon.num_points3D()
                 log["success"] = True
-                update_log(f"Done: {log['num_registered']} images, {log['num_points3d']} points")
+                update_log(f"SUCCESS: {log['num_registered']} images, {log['num_points3d']} 3D points")
             except Exception as e:
                 log["success"] = True
                 update_log(f"Reconstruction exists but stats unavailable: {e}")
         else:
-            update_log("No reconstruction created (sparse/0 not found)")
+            update_log("FAILED: No reconstruction created (sparse/0 not found)")
         
         log["status"] = "completed"
         
@@ -99,6 +182,8 @@ def run_mapping(db_path, img_path, out_path, opts_json, log_file, job_id):
         log["error"] = str(e)
         log["status"] = "failed"
         update_log(f"ERROR: {str(e)}")
+    finally:
+        stop_monitor.set()
     
     log["elapsed"] = time() - start
     log["updated_at"] = datetime.now().isoformat()
@@ -363,8 +448,9 @@ class MappingJobManager:
         .status-completed { background: #00ff8833; }
         .status-failed { background: #ff475733; }
         .status-timeout { background: #ff8c0033; }
-        .log-box { max-height: 100px; overflow-y: auto; font-size: 11px; 
-                   background: #0a0a15; padding: 5px; border-radius: 4px; }
+        .log-box { max-height: 200px; overflow-y: auto; font-size: 11px; 
+                   background: #0a0a15; padding: 8px; border-radius: 4px; 
+                   white-space: pre-wrap; word-break: break-word; }
         .refresh-info { color: #666; font-size: 12px; }
         #lastUpdate { color: #00d4ff; }
     </style>
@@ -462,7 +548,7 @@ class MappingJobManager:
                 let html = '';
                 for (let job of data.jobs) {
                     let statusClass = getStatusClass(job.status);
-                    let logs = (job.messages || []).slice(-3).map(m => 
+                    let logs = (job.messages || []).slice(-10).map(m => 
                         `<div>[${m.t}] ${m.msg}</div>`).join('');
                     
                     html += `<tr class="status-${statusClass}">
