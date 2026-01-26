@@ -135,12 +135,52 @@ class MappingJob:
 class MappingJobManager:
     """Manages background mapping jobs with live dashboard."""
     
-    def __init__(self, dashboard_dir: Path):
+    def __init__(self, dashboard_dir: Path, update_interval: float = 5.0):
         self.jobs: Dict[str, MappingJob] = {}
         self.dashboard_dir = Path(dashboard_dir)
         self.dashboard_dir.mkdir(parents=True, exist_ok=True)
         self._job_counter = 0
+        self._stop_updater = threading.Event()
+        self._update_interval = update_interval
+        self._updater_thread = None
         self._create_dashboard_html()
+        self._update_dashboard_status()  # Create initial status file
+    
+    def _start_background_updater(self):
+        """Start background thread that periodically updates dashboard."""
+        if self._updater_thread is not None and self._updater_thread.is_alive():
+            return  # Already running
+        
+        self._stop_updater.clear()
+        
+        def updater_loop():
+            while not self._stop_updater.is_set():
+                try:
+                    # Check all jobs and update their status
+                    for job_id, job in list(self.jobs.items()):
+                        if not job.finished:
+                            poll = job.process.poll()
+                            if poll is not None:
+                                # Job finished - read final log
+                                job.finished = True
+                                job.result = self.read_job_log(job_id)
+                                job.result['elapsed'] = time() - job.started_at
+                                self._cleanup_job_files(job)
+                    
+                    self._update_dashboard_status()
+                except Exception as e:
+                    pass  # Don't crash the updater thread
+                
+                self._stop_updater.wait(self._update_interval)
+        
+        self._updater_thread = threading.Thread(target=updater_loop, daemon=True)
+        self._updater_thread.start()
+    
+    def _stop_background_updater(self):
+        """Stop the background updater thread."""
+        self._stop_updater.set()
+        if self._updater_thread is not None:
+            self._updater_thread.join(timeout=2.0)
     
     def start_job(self, name: str, database_path: Path, image_path: Path, 
                   output_path: Path, mapper_options: dict = None) -> str:
@@ -198,6 +238,9 @@ class MappingJobManager:
         
         self.jobs[job_id] = job
         print(f"    [BG] Started {job_id}: {name} (PID: {job.process.pid})")
+        
+        # Start background updater if not already running
+        self._start_background_updater()
         
         # Update dashboard
         self._update_dashboard_status()
@@ -328,7 +371,8 @@ class MappingJobManager:
 </head>
 <body>
     <h1>Mapping Jobs Dashboard</h1>
-    <p class="refresh-info">Auto-refresh: 3s | Last update: <span id="lastUpdate">-</span></p>
+    <p class="refresh-info">Auto-refresh: 3s | Last update: <span id="lastUpdate">-</span> | 
+       <small style="color:#888">If not loading, run: <code>python -m http.server 8000</code> in this folder</small></p>
     
     <div class="summary" id="summary">Loading...</div>
     
@@ -364,39 +408,76 @@ class MappingJobManager:
             return 'running';
         }
         
-        function updateDashboard() {
-            fetch('_dashboard_status.json?' + Date.now())
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('lastUpdate').textContent = 
-                        new Date(data.updated_at).toLocaleTimeString();
-                    
-                    document.getElementById('summary').innerHTML = `
-                        <span>Total: <b>${data.total_jobs}</b></span>
-                        <span class="running">Running: <b>${data.running}</b></span>
-                        <span class="completed">Completed: <b>${data.completed}</b></span>
-                    `;
-                    
-                    let html = '';
-                    for (let job of data.jobs) {
-                        let statusClass = getStatusClass(job.status);
-                        let logs = (job.messages || []).slice(-3).map(m => 
-                            `<div>[${m.t}] ${m.msg}</div>`).join('');
-                        
-                        html += `<tr class="status-${statusClass}">
-                            <td>${job.job_id}</td>
-                            <td>${job.name || '-'}</td>
-                            <td class="${statusClass}">${job.status || 'unknown'}</td>
-                            <td>${formatTime(job.elapsed)}</td>
-                            <td>${job.num_registered || 0}</td>
-                            <td>${job.num_points3d || 0}</td>
-                            <td><div class="log-box">${logs || '-'}</div></td>
-                        </tr>`;
+        function loadJSON(url, callback) {
+            // Use XMLHttpRequest for better file:// compatibility
+            var xhr = new XMLHttpRequest();
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200 || xhr.status === 0) {
+                        try {
+                            var data = JSON.parse(xhr.responseText);
+                            callback(null, data);
+                        } catch (e) {
+                            callback('JSON parse error: ' + e.message, null);
+                        }
+                    } else {
+                        callback('HTTP error: ' + xhr.status, null);
                     }
-                    document.getElementById('jobsTable').innerHTML = html || 
-                        '<tr><td colspan="7">No jobs yet</td></tr>';
-                })
-                .catch(e => console.log('Update error:', e));
+                }
+            };
+            xhr.onerror = function() {
+                callback('Network error', null);
+            };
+            try {
+                xhr.open('GET', url + '?' + Date.now(), true);
+                xhr.send();
+            } catch (e) {
+                callback('Request error: ' + e.message, null);
+            }
+        }
+        
+        function updateDashboard() {
+            loadJSON('_dashboard_status.json', function(err, data) {
+                if (err) {
+                    document.getElementById('summary').innerHTML = 
+                        '<span class="failed">Error loading status: ' + err + '</span>' +
+                        '<br><small>If using file://, try: python -m http.server 8000</small>';
+                    return;
+                }
+                
+                document.getElementById('lastUpdate').textContent = 
+                    new Date(data.updated_at).toLocaleTimeString();
+                
+                let successCount = data.jobs.filter(j => j.success).length;
+                let failedCount = data.jobs.filter(j => j.status === 'failed' || j.status === 'timeout').length;
+                
+                document.getElementById('summary').innerHTML = `
+                    <span>Total: <b>${data.total_jobs}</b></span>
+                    <span class="running">Running: <b>${data.running}</b></span>
+                    <span class="completed">Completed: <b>${data.completed}</b></span>
+                    <span class="completed">Success: <b>${successCount}</b></span>
+                    <span class="failed">Failed: <b>${failedCount}</b></span>
+                `;
+                
+                let html = '';
+                for (let job of data.jobs) {
+                    let statusClass = getStatusClass(job.status);
+                    let logs = (job.messages || []).slice(-3).map(m => 
+                        `<div>[${m.t}] ${m.msg}</div>`).join('');
+                    
+                    html += `<tr class="status-${statusClass}">
+                        <td>${job.job_id}</td>
+                        <td>${job.name || '-'}</td>
+                        <td class="${statusClass}">${job.status || 'unknown'}</td>
+                        <td>${formatTime(job.elapsed)}</td>
+                        <td>${job.num_registered || 0}</td>
+                        <td>${job.num_points3d || 0}</td>
+                        <td><div class="log-box">${logs || '-'}</div></td>
+                    </tr>`;
+                }
+                document.getElementById('jobsTable').innerHTML = html || 
+                    '<tr><td colspan="7">No jobs yet</td></tr>';
+            });
         }
         
         updateDashboard();
@@ -409,6 +490,8 @@ class MappingJobManager:
         with open(dashboard_file, 'w') as f:
             f.write(html)
         print(f"Dashboard created: {dashboard_file}")
+        print(f"  TIP: For best results, run in dashboard folder: python -m http.server 8000")
+        print(f"       Then open: http://localhost:8000/_dashboard.html")
     
     def wait_all(self, timeout: float = 0, poll_interval: float = 5) -> Dict[str, dict]:
         """Wait for all jobs to complete, updating dashboard periodically."""
@@ -443,6 +526,12 @@ class MappingJobManager:
             time_module.sleep(poll_interval)
         
         print(f"\n  All {len(self.jobs)} jobs completed!")
+        
+        # Stop background updater
+        self._stop_background_updater()
+        
+        # Final dashboard update
+        self._update_dashboard_status()
         
         # Return all results
         return {job_id: job.result for job_id, job in self.jobs.items()}

@@ -1,0 +1,63 @@
+# RopeCap Multi-Pose Configuration
+# Single camera + multiple poses -> single COLMAP DB
+# ================================================
+# NOTE: Runs in Docker where D:\ is mounted as /d_disk
+
+# Model settings
+model:
+  name: MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric
+  checkpoint_dir: checkpoints
+
+# Paths (Docker paths - D:\ mounted as /d_disk)
+paths:
+  base_path: "/d_disk/_DataBuffer/RopeCap0121/17/undistort_fov110_p30y20_20260121_165059"
+  output: null  # Auto-generate: mapping3r_multipose-YYYYMMDD_HHMMSS
+
+# Processing settings
+processing:
+  # Multiple pose folders to collect from each camera
+  target_poses:
+    - "p+0_y+20_r+0"
+    - "p+0_y+0_r+0"
+    # Add more poses as needed:
+    # - "p+0_y-20_r+0"
+    # - "p-15_y+20_r+0"
+  
+  stride_frame: 1        # Use every Nth frame (1 = all frames)
+  run_mapping: true
+  async_mapping: true    # Background mapping with live dashboard
+  mapping_timeout: 1800  # 30 minutes per job
+
+# Matching strategy
+matching:
+  # Single strategy
+  type: num_pts
+  value: 1000
+  
+  # Or combined strategies (uncomment to use):
+  # combined:
+  #   - type: conf_thres
+  #     value: 2.5
+  #   - type: num_pts
+  #     value: 1500
+
+# Image settings
+image:
+  size: 512
+
+# Inference settings (MASt3R)
+inference:
+  batch_size: 16
+
+# COLMAP mapper settings
+mapper:
+  camera_model: PINHOLE
+  # share_intrinsics_by_pose: false  # true = separate camera per pose subfolder
+  min_num_matches: 15
+  multiple_models: false
+  extract_colors: true
+
+# Optional filters (leave empty to process all)
+filters:
+  groups: []     # e.g., ["group_000", "group_001"]
+  cameras: []    # e.g., ["cam0", "cam1"]
