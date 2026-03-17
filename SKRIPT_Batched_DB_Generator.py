@@ -5,9 +5,12 @@ Research Domain: Computer Vision, Machine Learning
 Email: xuanli(dot)chen(at)icloud.com
 LinkedIn: https://be.linkedin.com/in/xuanlichen
 
-Batched DB Generator - Batched processing script for large image sets.
-Processes images in overlapping batches (bubbles) of 60 images each.
-Each batch overlaps by 10 images with the previous batch for continuity.
+Batched DB Generator - create COLMAP-style matching databases and sparse reconstructions.
+
+Historically this script generated one COLMAP `database.db` per temporal batch/window
+(`batch_001`, `batch_002`, ...), hence the name "batched DB". In the current version,
+the script processes one provided image set per run, but the "DB" still refers to the
+COLMAP matching database that stores images, keypoints, and verified matches.
 
 Output Data Format (COLMAP-style structure):
 ============================================
@@ -57,7 +60,7 @@ from dust3rDir.dust3r.utils.image import load_images
 from dust3rDir.dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL
 from mast3r.colmap.mapping import kapture_import_image_folder_or_list, glomap_run_mapper
 from mast3r.image_pairs import make_pairs
-from MOD_FeatureProcess import run_mast3r_matching
+from MOD_FeatureProcess import probe_mast3r_matching, run_mast3r_matching
 from mast3r.retrieval.processor import Retriever
 
 
@@ -182,17 +185,24 @@ def _format_strategy_for_foldername(matching_strategy):
         return format_single(strategy_type, strategy_value)
 
 
-def _run_pycolmap_mapper_subprocess(database_path: str, image_path: str, output_path: str):
+def _run_pycolmap_mapper_subprocess(database_path: str, image_path: str, output_path: str, colmap_executable: str = None):
     """
     Run pycolmap incremental mapping in a subprocess.
     This isolates the mapping and prevents crashes from affecting the main process.
     """
     try:
         import pycolmap
+        mapper_options = pycolmap.IncrementalMapperOptions()
+        mapper_options.num_threads = multiprocessing.cpu_count() - 2
+
+        if colmap_executable:
+            pycolmap.set_colmap_executable(colmap_executable)
+
         pycolmap.incremental_mapping(
             database_path=database_path,
             image_path=image_path,
-            output_path=output_path
+            output_path=output_path,
+            options=mapper_options
         )
         return True
     except Exception as e:
@@ -206,7 +216,8 @@ def run_mapper_async(
     output_path: str,
     mapper_type: str = 'COLMAP',
     wait: bool = False,
-    timeout: int = None
+    timeout: int = None,
+    colmap_executable: str = None
 ):
     """
     Run mapper in a separate process (async by default).
@@ -218,7 +229,8 @@ def run_mapper_async(
         mapper_type: 'COLMAP' or 'GLOMAP'
         wait: If True, wait for completion. If False, return immediately.
         timeout: Timeout in seconds (only if wait=True)
-        
+        colmap_executable: Path to the COLMAP executable (e.g., 'D:/COLMAP/colmap.bat')
+
     Returns:
         Process object if wait=False, success boolean if wait=True
     """
@@ -228,7 +240,7 @@ def run_mapper_async(
         # Use multiprocessing to run pycolmap in isolation
         proc = multiprocessing.Process(
             target=_run_pycolmap_mapper_subprocess,
-            args=(database_path, image_path, output_path)
+            args=(database_path, image_path, output_path, colmap_executable)
         )
         proc.start()
         
@@ -258,25 +270,51 @@ def run_mapper_async(
         raise ValueError(f"Unknown mapper type: {mapper_type}")
 
 
-def _prepare_images_folder(outdir, filelist):
+def _prepare_images_folder(outdir, filelist, original_image_roots):
     """
-    Copy images to images/ subfolder first, so COLMAP database stores 
-    paths as 'images/filename.png' (COLMAP convention).
-    
+    Copy images to an 'images' subfolder, preserving the relative path
+    from their common ancestor directory to avoid name collisions.
+
+    For example, if image roots are '.../KeyFrames/cam0' and '.../KeyFrames/cam1',
+    the common root is '.../KeyFrames'. An image from '.../KeyFrames/cam0/pic.jpg'
+    will be copied to 'outdir/images/cam0/pic.jpg'.
+
     Returns:
-        Tuple of (new_root_path, new_filelist) with images in images/ subfolder
+        Tuple of (new_root_path, new_filelist) with images in the 'images' subfolder.
     """
-    images_dir = os.path.join(outdir, 'images')
-    os.makedirs(images_dir, exist_ok=True)
-    
+    images_dir = Path(outdir) / 'images'
+    images_dir.mkdir(exist_ok=True)
+
+    # Find the common ancestor path for all image roots
+    # os.path.commonpath works on strings
+    str_image_roots = [str(p) for p in original_image_roots]
+    common_root = Path(os.path.commonpath(str_image_roots))
+    print(f"  Common image root detected: {common_root}")
+
     new_filelist = []
-    for src_path in filelist:
-        dst_path = os.path.join(images_dir, os.path.basename(src_path))
-        if not os.path.exists(dst_path):
+    for src_path_str in filelist:
+        src_path = Path(src_path_str)
+
+        # The relative path from the common ancestor
+        try:
+            relative_path = src_path.relative_to(common_root)
+        except ValueError:
+            # This might happen if a file is not under the common root, which is unlikely
+            # but we can fall back to a safe default (using the last parts of the path)
+            relative_path = Path(*src_path.parts[-3:])
+
+        dst_path = images_dir / relative_path
+
+        # Create the necessary subdirectories
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not dst_path.exists():
             shutil.copy2(src_path, dst_path)
-        new_filelist.append(dst_path)
-    
-    # Root path is the output dir, so relative paths will be 'images/filename.png'
+
+        new_filelist.append(str(dst_path))
+
+    # The root path for COLMAP is the output directory, so relative paths will be like
+    # 'images/cam0/p+0_y+30_r+0/image.jpg'
     return outdir, new_filelist
 
 
@@ -284,7 +322,7 @@ def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_
     """
     Copy database to COLMAP-style folder structure.
     Images should already be in images/ subfolder.
-    
+
     Output structure:
         colmap_output_dir/
         ├── images/              # Already populated
@@ -294,11 +332,11 @@ def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_
         └── database.db
     """
     os.makedirs(colmap_output_dir, exist_ok=True)
-    
+
     # Create sparse directory (empty, for later reconstruction)
     sparse_dir = os.path.join(colmap_output_dir, 'sparse')
     os.makedirs(sparse_dir, exist_ok=True)
-    
+
     # Copy database
     dst_db_path = os.path.join(colmap_output_dir, 'database.db')
     shutil.copy2(colmap_db_path, dst_db_path)
@@ -309,23 +347,57 @@ def _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_
     print(f"    - sparse/: created (empty)")
 
 
+def _parse_matching_strategy(strategy_cfg, default=('num_pts', 1000)):
+    """Parse a matching strategy config block into tuple/list form."""
+    strategy_cfg = strategy_cfg or {}
+    if 'combined' in strategy_cfg and strategy_cfg['combined']:
+        return [(item['type'], item['value']) for item in strategy_cfg['combined']]
+    return (
+        strategy_cfg.get('type', default[0]),
+        strategy_cfg.get('value', default[1])
+    )
+
+
+def _parse_probe_config(config: dict) -> dict:
+    """Parse optional low-resolution probe-stage configuration."""
+    probe_cfg = config.get('probe') or {}
+    probe_batch_size = int(probe_cfg.get('inference_batch_size', 32))
+    return {
+        'enabled': bool(probe_cfg.get('enabled', False)),
+        'image_size': int(probe_cfg.get('image_size', 256)),
+        'inference_batch_size': max(1, probe_batch_size),
+        'chunk_size': max(1, int(probe_cfg.get('chunk_size', probe_batch_size))),
+        'min_matches': max(0, int(probe_cfg.get('min_matches', 100))),
+        'matching_strategy': _parse_matching_strategy(
+            probe_cfg.get('matching', {}),
+            default=('conf_thres', 1.001)
+        ),
+    }
+
+
 def get_reconstructed_scene(
         outdir,
         model,
         filelist,
+        original_image_roots,
+        inference_batch_size=16,
         shared_intrinsics=True,
         mapper='COLMAP',
         colmap_output_dir=None,
-        matching_strategy=('conf_thres', 1.001)
+        matching_strategy=('conf_thres', 1.001),
+        colmap_executable=None,
+        probe_config=None
 ):
     """
     from a list of images, run mast3r inference, sparse global aligner.
     then run get_3D_model_from_scene
-    
+
     Args:
         outdir: Output directory
         model: MASt3R model
         filelist: List of image file paths
+        original_image_roots: List of original root directories for the images
+        inference_batch_size: Batch size for the model inference step.
         shared_intrinsics: Whether to use shared intrinsics
         mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
         colmap_output_dir: Path to copy COLMAP-style output (images/, sparse/, database.db)
@@ -333,13 +405,17 @@ def get_reconstructed_scene(
             - ('conf_thres', float): Fixed confidence threshold (default: 1.001)
             - ('ratio', float): Keep top X% of matches (e.g., 0.1 for top 10%)
             - ('num_pts', int): Keep top N matches by confidence
+        colmap_executable: Path to the COLMAP executable (e.g., 'D:/COLMAP/colmap.bat')
+        probe_config: Optional low-resolution probe-stage configuration.
     """
     silent = False
     image_size = 512
+    patch_size = 16
+    probe_config = copy.deepcopy(probe_config or {'enabled': False})
     
-    # First copy images to images/ subfolder so COLMAP paths are 'images/filename.png'
-    root_path, filelist = _prepare_images_folder(outdir, filelist)
-    
+    # First copy images to images/ subfolder so COLMAP paths are preserved
+    root_path, filelist = _prepare_images_folder(outdir, filelist, original_image_roots)
+
     imgs = load_images(filelist, size=image_size, square_ok=True, verbose=not silent)
     assert len(imgs) > 1, "Need at least 2 images to run reconstruction"
 
@@ -359,6 +435,65 @@ def get_reconstructed_scene(
         (filelist_relpath[img1['idx']], filelist_relpath[img2['idx']])
         for img1, img2 in pairs
     ]
+    device = "cuda"
+    dense_matching = False
+    matching_info = {
+        'generated_pairs': len(image_pairs),
+        'full_inference': {
+            'image_size': image_size,
+            'patch_size': patch_size,
+            'inference_batch_size': int(inference_batch_size),
+        },
+    }
+
+    if probe_config.get('enabled'):
+        probe_image_size = int(probe_config.get('image_size', 256))
+        probe_batch_size = max(1, int(probe_config.get('inference_batch_size', 32)))
+        probe_chunk_size = max(probe_batch_size, int(probe_config.get('chunk_size', probe_batch_size)))
+        probe_min_matches = max(0, int(probe_config.get('min_matches', 100)))
+        probe_matching_strategy = probe_config.get('matching_strategy', ('conf_thres', 1.001))
+
+        print(
+            f"Running probe sweep at {probe_image_size}px "
+            f"(batch={probe_batch_size}, min_matches={probe_min_matches})..."
+        )
+        probed_image_pairs, probe_stats = probe_mast3r_matching(
+            model=model,
+            maxdim=probe_image_size,
+            patch_size=patch_size,
+            device=device,
+            kdata=kdata,
+            root_path=root_path,
+            image_pairs_kapture=image_pairs,
+            min_matches=probe_min_matches,
+            dense_matching=dense_matching,
+            pixel_tol=5,
+            matching_strategy=probe_matching_strategy,
+            chunk_size=probe_chunk_size,
+            batch_size=probe_batch_size,
+        )
+        matching_info['probe'] = {
+            'enabled': True,
+            'image_size': probe_image_size,
+            'patch_size': patch_size,
+            'inference_batch_size': probe_batch_size,
+            'matching_strategy': probe_matching_strategy,
+            **probe_stats,
+        }
+        if len(probed_image_pairs) == 0:
+            raise Exception("probe rejected all image pairs")
+
+        image_pairs = probed_image_pairs
+        print(
+            f"Probe kept {len(image_pairs)} / {probe_stats['pairs_before_probe']} unique pairs "
+            f"for full {image_size}px inference."
+        )
+    else:
+        matching_info['probe'] = {
+            'enabled': False,
+            'pairs_before_probe': len(image_pairs),
+            'pairs_after_probe': len(image_pairs),
+        }
 
     colmap_db_path = os.path.join(cache_dir, 'colmap.db')
     if os.path.isfile(colmap_db_path):
@@ -369,21 +504,36 @@ def get_reconstructed_scene(
     try:
         kapture_to_colmap(kdata, root_path, tar_handler=None, database=colmap_db,
                           keypoints_type=None, descriptors_type=None, export_two_view_geometry=False)
-        device = "cuda"
         # TODO: how about set dense matching to True ? -> not very helpful, results: D:\RunningData\ZhiNengDao\75to94-720P_32
-        dense_matching = False   # False
-        colmap_image_pairs = run_mast3r_matching(model, image_size, 16, device,
-                                                 kdata, root_path, image_pairs, colmap_db,
-                                                 dense_matching, 5, matching_strategy,
-                                                 False, 3)
-        colmap_db.close()
+        colmap_image_pairs = run_mast3r_matching(
+            model=model,
+            maxdim=image_size,
+            patch_size=patch_size,
+            device=device,
+            kdata=kdata,
+            root_path=root_path,
+            image_pairs_kapture=image_pairs,
+            colmap_db=colmap_db,
+            dense_matching=dense_matching,
+            pixel_tol=5,
+            matching_strategy=matching_strategy,
+            skip_geometric_verification=False,
+            min_len_track=3,
+            chunk_size=max(16, int(inference_batch_size)),
+            batch_size=max(1, int(inference_batch_size)),
+        )
     except Exception as e:
-        print(f'Error {e}')
+        raise RuntimeError(f"matching failed: {e}") from e
+    finally:
         colmap_db.close()
-        exit(1)
 
     if len(colmap_image_pairs) == 0:
         raise Exception("no matches were kept")
+
+    matching_info['full_matching'] = {
+        'pairs_sent_to_full_matching': len(image_pairs),
+        'pairs_with_verified_matches': len(colmap_image_pairs),
+    }
 
     # colmap db is now full, run colmap
 
@@ -406,10 +556,17 @@ def get_reconstructed_scene(
     elif mapper == 'COLMAP':
         print("Using COLMAP incremental mapper (sync)...")
         # Use pycolmap incremental mapping
+        if colmap_executable:
+            pycolmap.set_colmap_executable(colmap_executable)
+
+        mapper_options = pycolmap.IncrementalMapperOptions()
+        mapper_options.num_threads = multiprocessing.cpu_count() - 2
+
         pycolmap.incremental_mapping(
             database_path=colmap_db_path,
             image_path=root_path,
-            output_path=reconstruction_path
+            output_path=reconstruction_path,
+            options=mapper_options
         )
     elif mapper == 'COLMAP_ASYNC':
         print("Launching COLMAP incremental mapper (async subprocess)...")
@@ -422,10 +579,11 @@ def get_reconstructed_scene(
             image_path=root_path,
             output_path=reconstruction_path,
             mapper_type='COLMAP',
-            wait=False
+            wait=False,
+            colmap_executable=colmap_executable
         )
         print(f"  Mapper process started (PID: {proc.pid})")
-        return None, None  # Return immediately, mapping runs in background
+        return None, None, matching_info  # Return immediately, mapping runs in background
     elif mapper == 'GLOMAP_ASYNC':
         print("Launching GLOMAP mapper (async subprocess)...")
         # Copy files to COLMAP structure first
@@ -440,13 +598,13 @@ def get_reconstructed_scene(
             wait=False
         )
         print(f"  Mapper process started (PID: {proc.pid})")
-        return None, None  # Return immediately, mapping runs in background
+        return None, None, matching_info  # Return immediately, mapping runs in background
     else:
         print(f"Skipping mapping (mapper='{mapper}')")
         # Copy files to COLMAP structure if colmap_output_dir is provided
         if colmap_output_dir:
             _copy_to_colmap_structure(colmap_output_dir, colmap_db_path, filelist, root_path)
-        return None, None
+        return None, None, matching_info
 
     outfile_name = tempfile.mktemp(suffix='_scene.glb', dir=outdir)
 
@@ -487,177 +645,120 @@ def get_reconstructed_scene(
     scene = GlomapRecon(colmap_world_to_cam, colmap_intrinsics, points3D, images)
     scene_state = GlomapReconState(scene, False, cache_dir, outfile_name)
     outfile = get_3D_model_from_scene(silent, scene_state)
-    return scene_state, outfile
+    return scene_state, outfile, matching_info
 
 
-def process_images_in_batches(
+def process_images(
         dp_images,
         dp_output,
         model,
-        batch_size=60,
-        overlap=10,
         mapper='GLOMAP',
-        start_frame=0,
-        spacing=1,
-        matching_strategy=('conf_thres', 1.001)
+        matching_strategy=('conf_thres', 1.001),
+        colmap_executable=None,
+        inference_batch_size=16,
+        probe_config=None
 ):
     """
-    Process images in overlapping batches.
-    
+    Process a set of images all at once.
+
     Args:
-        dp_images: Path to the directory containing images
-        dp_output: Path to the output directory
-        model: The MASt3R model
-        batch_size: Number of images per batch (default: 60)
-        overlap: Number of overlapping images between batches (default: 10)
-        mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping
-        start_frame: Frame index to start from (default: 0). Use this to resume processing.
-        spacing: Frame spacing/stride (default: 1). E.g., spacing=2 selects every 2nd frame.
-                 Batch still contains batch_size images but spans batch_size*spacing frames.
-        matching_strategy: Tuple specifying the filtering strategy:
-            - ('conf_thres', float): Fixed confidence threshold (default: 1.001)
-            - ('ratio', float): Keep top X% of matches (e.g., 0.1 for top 10%)
-            - ('num_pts', int): Keep top N matches by confidence
+        dp_images: Path or list of paths to directories containing images.
+        dp_output: Path to the output directory.
+        model: The MASt3R model.
+        mapper: Mapper to use - 'GLOMAP', 'COLMAP', or None to skip mapping.
+        matching_strategy: Tuple specifying the filtering strategy.
+        colmap_executable: Path to the COLMAP executable.
+        inference_batch_size: Batch size for the model inference step.
+        probe_config: Optional low-resolution pre-filter stage config.
     """
-    # Get all image files
-    fps_images = (list(dp_images.glob("*.jpg")) + 
-                  list(dp_images.glob("*.png")) + 
-                  list(dp_images.glob("*.jpeg")))
-    
+    # Get all image files from single or multiple directories
+    fps_images = []
+    image_roots = []
+    if isinstance(dp_images, list):
+        image_roots = [Path(p) for p in dp_images]
+        for dp in image_roots:
+            fps_images.extend(list(dp.glob("*.jpg")))
+            fps_images.extend(list(dp.glob("*.png")))
+            fps_images.extend(list(dp.glob("*.jpeg")))
+    else:
+        dp = Path(dp_images)
+        image_roots = [dp]
+        fps_images.extend(list(dp.glob("*.jpg")))
+        fps_images.extend(list(dp.glob("*.png")))
+        fps_images.extend(list(dp.glob("*.jpeg")))
+
     # Sort images by name for consistent ordering
     fps_images = sorted(fps_images)
     
     total_images = len(fps_images)
     print(f"\n{'='*80}")
     print(f"Total images found: {total_images}")
-    print(f"Batch size: {batch_size}")
-    print(f"Overlap: {overlap}")
-    print(f"Spacing: {spacing} (each batch spans {batch_size * spacing} frames)")
-    print(f"Start frame: {start_frame}")
     print(f"Mapper: {mapper if mapper else 'None (skip mapping)'}")
     print(f"{'='*80}\n")
     
     assert total_images > 1, "Need at least 2 images to run reconstruction"
-    assert start_frame < total_images, f"Start frame {start_frame} >= total images {total_images}"
-    assert spacing >= 1, f"Spacing must be >= 1, got {spacing}"
-    
-    # Calculate batches (step in frame indices, accounting for spacing)
-    # Each batch spans batch_size * spacing frames
-    # Overlap of N images means overlap of N * spacing frame indices
-    step_size = (batch_size - overlap) * spacing
-    batch_results = []
-    
-    # Calculate batch number based on start_frame
-    batch_num = start_frame // step_size if start_frame > 0 else 0
-    start_idx = start_frame
-    
-    while start_idx < total_images:
-        batch_num += 1
-        # End index in frame space (not accounting for spacing yet)
-        end_idx_raw = start_idx + batch_size * spacing
-        
-        # Get images for this batch with spacing
-        batch_indices = list(range(start_idx, min(end_idx_raw, total_images), spacing))
-        batch_images = [fps_images[i] for i in batch_indices]
-        num_images_in_batch = len(batch_images)
-        
-        # Actual end frame index (last frame in batch)
-        end_idx = batch_indices[-1] if batch_indices else start_idx
-        
-        print(f"\n{'='*80}")
-        print(f"Processing Batch {batch_num}")
-        print(f"Frame range: {start_idx} to {end_idx} (spacing={spacing}, {num_images_in_batch} images)")
-        print(f"{'='*80}\n")
-        
-        # Create batch-specific output directory with full parameters in name
-        # Format: batch_{num}_f{start}_to_f{end}_sp{spacing}_bs{batch_size}_{strategy}
-        # Handle both single strategy tuple and list of strategies
-        if isinstance(matching_strategy, list):
-            strategy_parts = [f"{s_type}{str(s_val).replace('.', 'p').replace('-', 'm')}" 
-                            for s_type, s_val in matching_strategy]
-            strategy_str = "_".join(strategy_parts)
-        else:
-            strategy_type, strategy_value = matching_strategy
-            strategy_str = f"{strategy_type}_{strategy_value}".replace('.', '_')
 
-        batch_output = dp_output / f"batch_{batch_num:03d}_f{start_idx:04d}_to_f{end_idx:04d}_sp{spacing}_bs{batch_size}_{strategy_str}"
-        batch_output.mkdir(parents=True, exist_ok=True)
-        
-        # Process this batch
-        try:
-            batch_start_time = time()
-            scene_state, outfile = get_reconstructed_scene(
-                outdir=batch_output,
-                model=model,
-                filelist=[fp.resolve().as_posix() for fp in batch_images],
-                mapper=mapper,
-                colmap_output_dir=str(batch_output),
-                matching_strategy=matching_strategy,
-            )
-            batch_time = time() - batch_start_time
-            
-            # Write batch_info.json summary file
-            batch_info = {
-                'batch_num': batch_num,
-                'start_frame': start_idx,
-                'end_frame': end_idx,
-                'spacing': spacing,
-                'batch_size': batch_size,
-                'overlap': overlap,
-                'num_images': num_images_in_batch,
-                'processing_time_seconds': batch_time,
-                'paths': {
-                    'images': 'images/',
-                    'sparse': 'sparse/',
-                    'database': 'database.db',
-                    'colmap_db': 'cache/colmap.db',
-                },
-                'source_images': [fp.name for fp in batch_images],
-                'success': True
-            }
-            batch_info_path = batch_output / 'batch_info.json'
-            with open(batch_info_path, 'w') as f:
-                json.dump(batch_info, f, indent=2)
-            
-            batch_results.append({
-                'batch_num': batch_num,
-                'start_idx': start_idx,
-                'end_idx': end_idx,
-                'spacing': spacing,
-                'batch_size': batch_size,
-                'num_images': num_images_in_batch,
-                'output_dir': batch_output,
-                'outfile': outfile,
-                'time': batch_time,
-                'success': True
-            })
-            
-            print(f"\n✓ Batch {batch_num} completed in {batch_time:.2f}s")
-            print(f"  Output saved to: {batch_output}")
-            print(f"  Batch info: {batch_info_path}")
-            
-        except Exception as e:
-            print(f"\n✗ Batch {batch_num} FAILED: {str(e)}")
-            batch_results.append({
-                'batch_num': batch_num,
-                'start_idx': start_idx,
-                'end_idx': end_idx,
-                'spacing': spacing,
-                'batch_size': batch_size,
-                'num_images': num_images_in_batch,
-                'output_dir': batch_output,
-                'outfile': None,
-                'time': 0,
-                'success': False,
-                'error': str(e)
-            })
-        
-        # Move to next batch
-        if end_idx >= total_images:
-            break
-        start_idx += step_size
-    
-    return batch_results
+    dp_output.mkdir(parents=True, exist_ok=True)
+
+    # Process all images in a single batch
+    try:
+        batch_start_time = time()
+        scene_state, outfile, matching_info = get_reconstructed_scene(
+            outdir=dp_output,
+            model=model,
+            filelist=[fp.resolve().as_posix() for fp in fps_images],
+            original_image_roots=image_roots,
+            mapper=mapper,
+            colmap_output_dir=str(dp_output),
+            matching_strategy=matching_strategy,
+            colmap_executable=colmap_executable,
+            inference_batch_size=inference_batch_size,
+            probe_config=probe_config,
+        )
+        batch_time = time() - batch_start_time
+
+        # Write batch_info.json summary file
+        batch_info = {
+            'num_images': total_images,
+            'processing_time_seconds': batch_time,
+            'paths': {
+                'images': 'images/',
+                'sparse': 'sparse/',
+                'database': 'database.db',
+                'colmap_db': 'cache/colmap.db',
+            },
+            'matching': {
+                'strategy': matching_strategy,
+                **matching_info,
+            },
+            'source_images': [fp.name for fp in fps_images],
+            'success': True
+        }
+        batch_info_path = dp_output / 'run_info.json'
+        with open(batch_info_path, 'w') as f:
+            json.dump(batch_info, f, indent=2)
+
+        print(f"\n✓ Processing completed in {batch_time:.2f}s")
+        print(f"  Output saved to: {dp_output}")
+        print(f"  Run info: {batch_info_path}")
+
+        return {
+            'output_dir': dp_output,
+            'outfile': outfile,
+            'time': batch_time,
+            'success': True,
+            'matching': matching_info,
+        }
+
+    except Exception as e:
+        print(f"\n✗ Processing FAILED: {str(e)}")
+        return {
+            'output_dir': dp_output,
+            'outfile': None,
+            'time': 0,
+            'success': False,
+            'error': str(e)
+        }
 
 
 def print_summary(batch_results, total_time):
@@ -707,41 +808,45 @@ def run_from_config(config_path: str):
     print(f"Loaded config from: {config_path}")
     
     # Parse paths
-    dp_images = Path(config['paths']['images'])
+    dp_images_raw = config['paths']['images']
+    if isinstance(dp_images_raw, list):
+        dp_images = [Path(p) for p in dp_images_raw]
+        # Use the parent of the first image folder for the output name
+        # Heuristic: find a common parent for a cleaner output path
+        try:
+            common_parent = Path(os.path.commonpath([str(p) for p in dp_images]))
+            output_base_parent = common_parent
+            output_base_name = "fused_output"
+        except ValueError:
+            output_base_parent = dp_images[0].parent
+            output_base_name = dp_images[0].name
+    else:
+        dp_images = Path(dp_images_raw)
+        output_base_name = dp_images.name
+        output_base_parent = dp_images.parent
+
     if 'output' in config['paths'] and config['paths']['output']:
         dp_output = Path(config['paths']['output'])
     else:
-        dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
-    
-    # Parse batch parameters
-    batch_cfg = config.get('batch', {})
-    BATCH_SIZE = batch_cfg.get('size', 30)
-    OVERLAP = batch_cfg.get('overlap', 15)
-    START_FRAME = batch_cfg.get('start_frame', 0)
-    SPACING = batch_cfg.get('spacing', 1)
-    
+        dp_output = output_base_parent / ("mapping3r_%s" % output_base_name)
+
     # Parse mapper
     MAPPER = config.get('mapper', None)
     
+    # Parse COLMAP executable path
+    COLMAP_EXECUTABLE = config.get('colmap_executable', None)
+
     # Parse matching strategy
     match_cfg = config.get('matching', {})
-    
-    # Check if combined strategies are specified
-    if 'combined' in match_cfg:
-        # Combined strategies: [('conf_thres', 2.5), ('num_pts', 1500)]
-        combined = match_cfg['combined']
-        MATCHING_STRATEGY = [(item['type'], item['value']) for item in combined]
-    else:
-        # Single strategy
-        strategy_type = match_cfg.get('type', 'num_pts')
-        strategy_value = match_cfg.get('value', 1000)
-        MATCHING_STRATEGY = (strategy_type, strategy_value)
+    MATCHING_STRATEGY = _parse_matching_strategy(match_cfg, default=('num_pts', 1000))
+    PROBE_CONFIG = _parse_probe_config(config)
     
     # Parse model config
     model_cfg = config.get('model', {})
     model_name = model_cfg.get('name', 'MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric')
     checkpoint_dir = model_cfg.get('checkpoint_dir', 'checkpoints')
-    
+    inference_batch_size = model_cfg.get('inference_batch_size', 16)
+
     # Load model
     weights_path = Path(checkpoint_dir) / (model_name + '.pth')
     weights_path = weights_path.resolve()
@@ -749,24 +854,27 @@ def run_from_config(config_path: str):
     model = AsymmetricMASt3R.from_pretrained(weights_path).to('cuda')
     print("Model loaded successfully!\n")
     
-    # Process images in batches
-    batch_results = process_images_in_batches(
+    # Process images
+    result = process_images(
         dp_images=dp_images,
         dp_output=dp_output,
         model=model,
-        batch_size=BATCH_SIZE,
-        overlap=OVERLAP,
         mapper=MAPPER,
-        start_frame=START_FRAME,
-        spacing=SPACING,
-        matching_strategy=MATCHING_STRATEGY
+        matching_strategy=MATCHING_STRATEGY,
+        colmap_executable=COLMAP_EXECUTABLE,
+        inference_batch_size=inference_batch_size,
+        probe_config=PROBE_CONFIG,
     )
     
     # Print summary
     total_time = time() - start_time
-    print_summary(batch_results, total_time)
-    
-    return batch_results
+    print(f"\nTotal execution time: {total_time:.2f} seconds.")
+    if result['success']:
+        print("✅ Run finished successfully.")
+    else:
+        print(f"❌ Run failed with error: {result.get('error')}")
+
+    return result
 
 
 if __name__ == "__main__":
@@ -774,50 +882,12 @@ if __name__ == "__main__":
     parser.add_argument('--config', '-c', type=str, default=None,
                         help='Path to YAML config file (e.g., configs/sample.yml)')
     args = parser.parse_args()
-    
+
     if args.config:
         # Run from config file
         run_from_config(args.config)
     else:
-        # Legacy mode: use hardcoded values
-        start_time = time()
-    
-        # Configuration
-        dp_images = Path("/d_disk/_DataBuffer/RopeCap/20251224_103638/parsed_data/undistort_fov110_720sq_final/cam1/p-15_y-10_r+0")
-        dp_output = dp_images.parent / ("mapping3r_batched_%s" % dp_images.name)
-        
-        # Batch parameters
-        BATCH_SIZE = 30  # Number of images per batch
-        OVERLAP = 15     # Number of overlapping images between batches (stride = 30-15 = 15)
-        MAPPER = None  # Options: 'GLOMAP', 'COLMAP', or None to skip mapping
-        START_FRAME = 0  # Frame index to start from (0 = beginning, use to resume processing)
-        SPACING = 1      # Frame spacing (1 = consecutive, 2 = every 2nd frame, etc.)
-        # Matching strategy options:
-        #   ('conf_thres', 1.001) - Fixed confidence threshold
-        #   ('ratio', 0.1) - Keep top 10% of matches
-        #   ('num_pts', 1000) - Keep top 1000 matches
-        MATCHING_STRATEGY = ('num_pts', 1000)
-        
-        # Load model
-        model_name = "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
-        weights_path = Path("checkpoints/" + model_name + '.pth').resolve()
-        print(f"Loading model from {weights_path}...")
-        model = AsymmetricMASt3R.from_pretrained(weights_path).to('cuda')
-        print("Model loaded successfully!\n")
-        
-        # Process images in batches
-        batch_results = process_images_in_batches(
-            dp_images=dp_images,
-            dp_output=dp_output,
-            model=model,
-            batch_size=BATCH_SIZE,
-            overlap=OVERLAP,
-            mapper=MAPPER,
-            start_frame=START_FRAME,
-            spacing=SPACING,
-            matching_strategy=MATCHING_STRATEGY
-        )
-        
-        # Print summary
-        total_time = time() - start_time
-        print_summary(batch_results, total_time)
+        # This legacy mode is no longer supported with the new structure.
+        # Please use a config file.
+        print("Please use a YAML configuration file with the --config argument.")
+        print("Example: python SKRIPT_Batched_DB_Generator.py --config configs/sample.yml")

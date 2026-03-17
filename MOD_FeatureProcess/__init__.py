@@ -30,6 +30,8 @@ from .ESSN_CreateDBfromFolder import (
 # Matching API
 from .ESSN_FeatureProcess import (
     essn_run_mast3r_matching,
+    essn_probe_mast3r_matching,
+    probe_mast3r_matching,
     run_mast3r_matching,  # backward-compatible alias
 )
 
@@ -47,6 +49,8 @@ __all__ = [
     'run_pycolmap_mapping',
     # Matching
     'essn_run_mast3r_matching',
+    'essn_probe_mast3r_matching',
+    'probe_mast3r_matching',
     'run_mast3r_matching',
     # Core
     'kern_get_im_matches',

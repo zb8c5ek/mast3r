@@ -97,7 +97,8 @@ def kern_get_im_matches(pred1, pred2, pairs, image_to_colmap, im_keypoints,
                         subsample: int = 8, 
                         pixel_tol: int = 0, 
                         viz: bool = False, 
-                        device: str = 'cuda'):
+                        device: str = 'cuda',
+                        collect_im_matches: bool = True):
     """
     Extract image matches from MASt3R predictions.
     
@@ -116,6 +117,8 @@ def kern_get_im_matches(pred1, pred2, pairs, image_to_colmap, im_keypoints,
         pixel_tol: Pixel tolerance (default: 0)
         viz: Whether to visualize matches (default: False)
         device: Device to run on (default: 'cuda')
+        collect_im_matches: Whether to convert/store COLMAP-ready matches.
+            Set to False for fast probe passes that only need match counts.
         
     Returns:
         Tuple of (im_matches, match_stats):
@@ -221,8 +224,9 @@ def kern_get_im_matches(pred1, pred2, pairs, image_to_colmap, im_keypoints,
 
         if len(matches_im0) == 0:
             continue
-        imidx0, imidx1, colmap_matches = convert_im_matches_pairs(pairs[i][0], pairs[i][1],
-                                                                  image_to_colmap, im_keypoints,
-                                                                  matches_im0, matches_im1, viz)
-        im_matches[(imidx0, imidx1)] = colmap_matches
+        if collect_im_matches:
+            imidx0, imidx1, colmap_matches = convert_im_matches_pairs(pairs[i][0], pairs[i][1],
+                                                                      image_to_colmap, im_keypoints,
+                                                                      matches_im0, matches_im1, viz)
+            im_matches[(imidx0, imidx1)] = colmap_matches
     return im_matches, match_stats

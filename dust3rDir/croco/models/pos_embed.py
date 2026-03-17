@@ -104,10 +104,22 @@ def interpolate_pos_embed(model, checkpoint_model):
 #----------------------------------------------------------
 
 try:
-    from models.curope import cuRoPE2D
+    # Try importing installed curope package
+    import curope
+    from croco.models.curope import cuRoPE2D
     RoPE2D = cuRoPE2D
 except ImportError:
-    print('Warning, cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead')
+    try:
+        # Fallback: try relative import (works when running from croco directory)
+        from models.curope import cuRoPE2D
+        RoPE2D = cuRoPE2D
+    except ImportError:
+        try:
+            # Fallback: try absolute import via croco package
+            from croco.models.curope import cuRoPE2D
+            RoPE2D = cuRoPE2D
+        except ImportError:
+            print('Warning, cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead')
 
     class RoPE2D(torch.nn.Module):
         

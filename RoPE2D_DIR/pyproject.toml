@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "RoPE2D"
+version = "1.0.0"
+description = "CUDA kernels for 2D Rotary Position Embedding (RoPE)"
+requires-python = ">=3.8"
+dependencies = ["torch"]
+
+[tool.setuptools.packages.find]
+where = ["."]

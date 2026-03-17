@@ -7,7 +7,7 @@ paths:
   # output: Optional, if not specified, will be auto-generated from images path
   # output: "/d_disk/_DataBuffer/RopeCap/output"
 
-# Batch processing parameters
+# Batch processing parameters (legacy/example only; current script processes one image set per run)
 batch:
   size: 30           # Number of images per batch
   overlap: 15        # Number of overlapping images between batches (stride = size - overlap)
@@ -39,3 +39,17 @@ matching:
 # model:
 #   name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
 #   checkpoint_dir: "checkpoints"
+#   inference_batch_size: 16
+
+# Optional low-resolution probe stage.
+# This runs a cheap 256px/128px sweep first and only keeps pairs that have
+# at least min_matches before the expensive 512px pass.
+# probe:
+#   enabled: true
+#   image_size: 256
+#   inference_batch_size: 32
+#   chunk_size: 32
+#   min_matches: 100
+#   matching:
+#     type: 'conf_thres'
+#     value: 1.001

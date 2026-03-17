@@ -1,0 +1,24 @@
+# Paths for input and output
+paths:
+  images:
+    - "E:/Demo0316/DevRun/RUN_20260311_101616/VO-en-SLAM_EPISODING_20260311_110655/SLAM/episode_001_full_t0000-0970/KeyFrames/cam0/p+0_y+0_r+0"
+    - "E:/Demo0316/DevRun/RUN_20260311_101616/VO-en-SLAM_EPISODING_20260311_110655/SLAM/episode_001_full_t0000-0970/KeyFrames/cam0/p+0_y+30_r+0"
+    - "E:/Demo0316/DevRun/RUN_20260311_101616/VO-en-SLAM_EPISODING_20260311_110655/SLAM/episode_001_full_t0000-0970/KeyFrames/cam1/p+0_y-30_r+0"
+  output: "E:/Demo0316/DevRun/RUN_20260311_101616/VO-en-SLAM_EPISODING_20260311_110655/SLAM/episode_001_full_t0000-0970/KeyFrames M3rREMAP/fused_all"
+
+# Model configuration
+model:
+  name: "MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+  checkpoint_dir: "checkpoints"
+  inference_batch_size: 8
+
+# Mapper to use for 3D reconstruction
+mapper: 'COLMAP'
+colmap_executable: "D:/COLMAP/colmap-3.13_x64-windows-cuda/COLMAP313.bat"
+
+
+# Feature matching strategy
+matching:
+  type: 'num_pts'
+  value: 1500
+

@@ -30,6 +30,112 @@ from .kern_feature_process import kern_get_im_matches, kern_apply_matching_strat
 logger = logging.getLogger(__name__)
 
 
+def _prepare_matching_inputs(
+        kdata: kapture.Kapture,
+        root_path: str,
+        maxdim: int,
+        patch_size: int,
+        image_pairs_kapture: List[Tuple[str, str]]):
+    """Prepare indexed image pairs for MASt3R matching/probing."""
+    assert kdata.records_camera is not None
+    image_paths = kdata.records_camera.data_list()
+    image_path_to_idx = {image_path: idx for idx, image_path in enumerate(image_paths)}
+
+    images = scene_prepare_images(root_path, maxdim, patch_size, image_paths)
+    image_pairs = [
+        ((image_path_to_idx[image_path1], image_path1), (image_path_to_idx[image_path2], image_path2))
+        for image_path1, image_path2 in image_pairs_kapture
+    ]
+    matching_pairs = remove_duplicates(images, image_pairs)
+    return image_paths, image_path_to_idx, images, matching_pairs
+
+
+def essn_probe_mast3r_matching(
+        model: AsymmetricMASt3R,
+        maxdim: int,
+        patch_size: int,
+        device,
+        kdata: kapture.Kapture,
+        root_path: str,
+        image_pairs_kapture: List[Tuple[str, str]],
+        min_matches: int = 100,
+        dense_matching: bool = False,
+        pixel_tol: int = 5,
+        matching_strategy: MatchingStrategy = ('conf_thres', 1.001),
+        chunk_size: int = 32,
+        batch_size: int = 32,
+        subsample: int = 8,
+        viz: bool = False):
+    """
+    Run a cheap probe sweep and keep only image pairs with enough matches.
+
+    This does not write anything to the COLMAP database; it only estimates per-pair
+    match counts so the caller can skip expensive full-resolution inference on weak pairs.
+    """
+    _, _, _, matching_pairs = _prepare_matching_inputs(
+        kdata=kdata,
+        root_path=root_path,
+        maxdim=maxdim,
+        patch_size=patch_size,
+        image_pairs_kapture=image_pairs_kapture,
+    )
+
+    kept_pairs = []
+    per_pair_matches = []
+    total_pairs = len(matching_pairs)
+    if total_pairs == 0:
+        return kept_pairs, {
+            'pairs_before_probe': 0,
+            'pairs_after_probe': 0,
+            'min_matches': int(min_matches),
+            'avg_matches': 0.0,
+            'max_matches': 0,
+        }
+
+    chunk_size = max(1, int(chunk_size))
+    batch_size = max(1, int(batch_size))
+    pbar = tqdm(range(0, total_pairs, chunk_size), desc="Probe matching")
+    for chunk in pbar:
+        pairs_chunk = matching_pairs[chunk:chunk + chunk_size]
+        output = inference(pairs_chunk, model, device, batch_size=batch_size, verbose=False)
+        pred1, pred2 = output['pred1'], output['pred2']
+
+        _, match_stats = kern_get_im_matches(
+            pred1, pred2, pairs_chunk,
+            image_to_colmap={},
+            im_keypoints={},
+            matching_strategy=matching_strategy,
+            is_sparse=not dense_matching,
+            subsample=subsample,
+            pixel_tol=pixel_tol,
+            viz=viz,
+            device=device,
+            collect_im_matches=False,
+        )
+
+        chunk_matches = match_stats['num_matches']
+        per_pair_matches.extend(chunk_matches)
+        for pair, num_matches in zip(pairs_chunk, chunk_matches):
+            if num_matches >= min_matches:
+                kept_pairs.append((pair[0]['instance'], pair[1]['instance']))
+
+        if per_pair_matches:
+            pbar.set_postfix({
+                'kept': f'{len(kept_pairs)}/{len(per_pair_matches)}',
+                'avg_matches': f'{np.mean(per_pair_matches):.0f}',
+                'min_keep': int(min_matches),
+            })
+
+    stats = {
+        'pairs_before_probe': total_pairs,
+        'pairs_after_probe': len(kept_pairs),
+        'min_matches': int(min_matches),
+        'avg_matches': float(np.mean(per_pair_matches)) if per_pair_matches else 0.0,
+        'max_matches': int(max(per_pair_matches)) if per_pair_matches else 0,
+    }
+    return kept_pairs, stats
+
+
 @gin.configurable
 def essn_run_mast3r_matching(
         model: AsymmetricMASt3R,
@@ -87,10 +193,13 @@ def essn_run_mast3r_matching(
     image_path_to_idx = {image_path: idx for idx, image_path in enumerate(image_paths)}
     image_path_to_ts = {kdata.records_camera[ts, camid]: (ts, camid) for ts, camid in kdata.records_camera.key_pairs()}
 
-    images = scene_prepare_images(root_path, maxdim, patch_size, image_paths)
-    image_pairs = [((image_path_to_idx[image_path1], image_path1), (image_path_to_idx[image_path2], image_path2))
-                   for image_path1, image_path2 in image_pairs_kapture]
-    matching_pairs = remove_duplicates(images, image_pairs)
+    _, _, images, matching_pairs = _prepare_matching_inputs(
+        kdata=kdata,
+        root_path=root_path,
+        maxdim=maxdim,
+        patch_size=patch_size,
+        image_pairs_kapture=image_pairs_kapture,
+    )
 
     colmap_camera_ids = get_colmap_camera_ids_from_db(colmap_db, kdata.records_camera)
     colmap_image_ids = get_colmap_image_ids_from_db(colmap_db)
@@ -181,6 +290,7 @@ def essn_run_mast3r_matching(
 
 # Backward compatible alias
 run_mast3r_matching = essn_run_mast3r_matching
+probe_mast3r_matching = essn_probe_mast3r_matching
 
 
 if __name__ == "__main__":
